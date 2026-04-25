@@ -34,14 +34,28 @@ class BitgetClient:
         total_usdt = float(usdt.get("total") or 0)
         free_usdt  = float(usdt.get("free")  or 0)
 
-        # info에서 추가 정보 파싱
+        # info가 list로 올 때 직접 파싱
         upnl = 0.0
-        info_list = bal.get("info", {}).get("data", [])
-        if isinstance(info_list, list):
-            for item in info_list:
-                if item.get("marginCoin") == "USDT":
+        raw_info = bal.get("info")
+        if isinstance(raw_info, list):
+            # info 자체가 계좌 리스트
+            for item in raw_info:
+                if isinstance(item, dict) and item.get("marginCoin") == "USDT":
+                    if not total_usdt:
+                        total_usdt = float(item.get("equity", item.get("usdtEquity", 0)) or 0)
+                        free_usdt  = float(item.get("available", 0) or 0)
                     upnl = float(item.get("unrealizedPL", 0) or 0)
                     break
+        elif isinstance(raw_info, dict):
+            data = raw_info.get("data", [])
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and item.get("marginCoin") == "USDT":
+                        if not total_usdt:
+                            total_usdt = float(item.get("equity", 0) or 0)
+                            free_usdt  = float(item.get("available", 0) or 0)
+                        upnl = float(item.get("unrealizedPL", 0) or 0)
+                        break
 
         return {
             "equity":          total_usdt,
