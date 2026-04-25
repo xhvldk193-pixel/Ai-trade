@@ -2059,6 +2059,7 @@ async def account_endpoint():
             # 성공 시 캐시 저장 (0 제외)
             if equity > 0:
                 _cached_account = result
+                return result
             elif _cached_account:
                 return _cached_account
             return result
