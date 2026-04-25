@@ -6973,7 +6973,7 @@ function showError(msg) {
 
   // ── 유틸 ─────────────────────────────────
   function _fmt(v) { return v ? Number(v).toLocaleString('en-US',{maximumFractionDigits:2}) : '–'; }
-  function _setVal(id, v) { const el=document.getElementById(id); if(el) el.value=v; }
+  function _setVal(id, v) { const el=document.getElementById(id); if(el && document.activeElement !== el) el.value=v; }
   function setFeedback(msg, color) {
     const el = document.getElementById('at-feedback');
     if (el) { el.textContent = msg; el.style.color = color||'#9098c0'; }
