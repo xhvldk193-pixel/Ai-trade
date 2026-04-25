@@ -6808,8 +6808,10 @@ function showError(msg) {
     } catch(e) { setFeedback('조회 실패: ' + e.message, 'red'); }
   };
   async function atRefreshSilent() {
+    const overlay = document.getElementById("at-panel-overlay");
+    if (overlay && overlay.classList.contains("open")) return;
     try {
-      const r = await fetch('/api/auto-trade/status');
+      const r = await fetch("/api/auto-trade/status");
       const d = await r.json();
       _renderStatus(d);
     } catch {}
