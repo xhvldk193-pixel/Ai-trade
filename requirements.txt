@@ -8,6 +8,8 @@ uvicorn[standard]>=0.27.0
 python-dotenv>=1.0.0
 websockets>=12.0
 rank_bm25>=0.2.2
+# force reinstall
 yfinance>=0.2.40
 ccxt>=4.3.0
 rank_bm25>=0.2.2
+# force reinstall
