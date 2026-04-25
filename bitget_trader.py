@@ -1,4 +1,3 @@
-
 """
 Bitget USDT-M Futures 자동매매 모듈 (ccxt 기반)
 TP/SL: Claude AI 피보나치 기반 목표가/손절가 직접 전달
@@ -30,41 +29,23 @@ class BitgetClient:
     def get_account(self, symbol: str = "BTCUSDT") -> dict:
         """USDT 선물 계좌 잔고 조회."""
         bal = self._ex.fetch_balance({"type": "swap"})
-        print("[Bitget-DEBUG] keys:", list(bal.keys()), flush=True)
-        print("[Bitget-DEBUG] USDT:", bal.get("USDT"), flush=True)
-        print("[Bitget-DEBUG] total:", bal.get("total"), flush=True)
-        print("[Bitget-DEBUG] info:", str(bal.get("info",""))[:300], flush=True)
+        # ccxt 표준 구조: bal["USDT"]["total"], bal["USDT"]["free"]
+        usdt = bal.get("USDT") or {}
+        total_usdt = float(usdt.get("total") or 0)
+        free_usdt  = float(usdt.get("free")  or 0)
 
-        # ccxt 표준 구조 시도
-        total_usdt = (
-            (bal.get("USDT") or {}).get("total")
-            or (bal.get("total") or {}).get("USDT")
-            or 0
-        )
-        free_usdt = (
-            (bal.get("USDT") or {}).get("free")
-            or (bal.get("free") or {}).get("USDT")
-            or 0
-        )
+        # info에서 추가 정보 파싱
+        upnl = 0.0
+        info_list = bal.get("info", {}).get("data", [])
+        if isinstance(info_list, list):
+            for item in info_list:
+                if item.get("marginCoin") == "USDT":
+                    upnl = float(item.get("unrealizedPL", 0) or 0)
+                    break
 
-        # info 필드 직접 파싱 (거래소별 raw 응답)
-        if not total_usdt:
-            info_list = bal.get("info", {}).get("data", [])
-            if isinstance(info_list, list):
-                for item in info_list:
-                    if item.get("marginCoin") == "USDT":
-                        total_usdt = float(item.get("equity",    0) or 0)
-                        free_usdt  = float(item.get("available", 0) or 0)
-                        log.info("[Bitget] info 파싱 성공: equity=%s available=%s", total_usdt, free_usdt)
-                        break
-            elif isinstance(info_list, dict):
-                total_usdt = float(info_list.get("equity",    0) or 0)
-                free_usdt  = float(info_list.get("available", 0) or 0)
-
-        upnl = float(total_usdt or 0) - float(free_usdt or 0)
         return {
-            "equity":          float(total_usdt or 0),
-            "available":       float(free_usdt  or 0),
+            "equity":          total_usdt,
+            "available":       free_usdt,
             "unrealizedPL":    upnl,
             "todayProfitLoss": 0,
         }
