@@ -1669,7 +1669,7 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
 
 @app.on_event("startup")
 async def on_startup():
-    telegram_alert.init(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
+    telegram_alert.init(os.environ.get("TELEGRAM_BOT_TOKEN",""), os.environ.get("TELEGRAM_CHAT_ID",""))
     await _market_stream.start()
     await _account_stream.start()
     await _macro_snapshot.start()
