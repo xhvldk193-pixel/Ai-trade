@@ -9,6 +9,7 @@ TP/SL 전략:
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac as _hmac
 import json
@@ -34,10 +35,14 @@ class BitgetClient:
         self._s = requests.Session()
 
     def _sign(self, ts: str, method: str, path: str, body: str = "") -> str:
+        # Bitget v2: base64 인코딩 서명
         pre = ts + method.upper() + path + body
-        return _hmac.new(
-            self.secret_key.encode(), pre.encode(), hashlib.sha256
-        ).hexdigest()
+        mac = _hmac.new(
+            self.secret_key.encode("utf-8"),
+            pre.encode("utf-8"),
+            hashlib.sha256
+        ).digest()
+        return base64.b64encode(mac).decode("utf-8")
 
     def _headers(self, method: str, path: str, body: str = "") -> dict:
         ts = str(int(time.time() * 1000))
