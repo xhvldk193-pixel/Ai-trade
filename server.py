@@ -1597,6 +1597,35 @@ _auto_trade_lock = asyncio.Lock()
 _last_trade_result = {}
 _trade_log = []
 _TRADE_LOG_MAX = 100
+_AT_SETTINGS_PATH = os.path.join(BASE_DIR, "data", "auto_trade_settings.json")
+_cached_account = {}
+
+def _load_at_settings():
+    global _auto_trade_enabled
+    try:
+        if os.path.exists(_AT_SETTINGS_PATH):
+            s = json.load(open(_AT_SETTINGS_PATH))
+            _auto_trade_enabled = s.get("enabled", AUTO_TRADE_ENABLED)
+            if _auto_trader:
+                _auto_trader.usdt_per_trade = s.get("usdt_per_trade", AUTO_TRADE_USDT)
+                _auto_trader.leverage = s.get("leverage", AUTO_TRADE_LEVERAGE)
+                _auto_trader.min_confidence = s.get("min_confidence", AUTO_TRADE_MIN_CONF)
+                _auto_trader.use_tp = s.get("use_tp", AUTO_TRADE_USE_TP)
+                _auto_trader.use_sl = s.get("use_sl", AUTO_TRADE_USE_SL)
+    except Exception as e:
+        print("[auto-trade] 설정 로드 실패:", e)
+
+def _save_at_settings():
+    try:
+        os.makedirs(os.path.dirname(_AT_SETTINGS_PATH), exist_ok=True)
+        cfg = _auto_trader
+        s = {"enabled": _auto_trade_enabled, "usdt_per_trade": cfg.usdt_per_trade if cfg else AUTO_TRADE_USDT, "leverage": cfg.leverage if cfg else AUTO_TRADE_LEVERAGE, "min_confidence": cfg.min_confidence if cfg else AUTO_TRADE_MIN_CONF, "use_tp": cfg.use_tp if cfg else AUTO_TRADE_USE_TP, "use_sl": cfg.use_sl if cfg else AUTO_TRADE_USE_SL}
+        json.dump(s, open(_AT_SETTINGS_PATH, "w"))
+    except Exception as e:
+        print("[auto-trade] 설정 저장 실패:", e)
+
+_load_at_settings()
+
 
 
 # ══════════════════════════════════════════════
@@ -2316,6 +2345,7 @@ async def auto_trade_settings(body: AutoTradeSettingsRequest):
                 _auto_trader.use_sl = body.use_sl
 
 
+    _save_at_settings()
     return {"ok": True, "enabled": _auto_trade_enabled}
 
 
