@@ -1996,10 +1996,15 @@ async def account_endpoint():
             acct = await asyncio.to_thread(_auto_trader.get_account)
             positions = await asyncio.to_thread(_auto_trader.get_positions)
 
-            equity     = float(acct.get("equity",        0) or 0)
-            available  = float(acct.get("available",     0) or 0)
-            unrealized = float(acct.get("unrealizedPL",  0) or 0)
+            equity     = float(acct.get("equity",          0) or 0)
+            available  = float(acct.get("available",       0) or 0)
+            unrealized = float(acct.get("unrealizedPL",    0) or 0)
             today_pnl  = float(acct.get("todayProfitLoss", 0) or 0)
+            # ccxt 폴백: info 필드
+            if equity == 0 and acct.get("info"):
+                info = acct["info"]
+                equity    = float(info.get("equity",    info.get("usdtEquity",    0)) or 0)
+                available = float(info.get("available", info.get("available",     0)) or 0)
 
             pos_list = []
             for p in positions:

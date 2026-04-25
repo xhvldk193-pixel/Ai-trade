@@ -29,11 +29,23 @@ class BitgetClient:
     def get_account(self, symbol: str = "BTCUSDT") -> dict:
         """USDT 선물 계좌 잔고 조회."""
         bal = self._ex.fetch_balance({"type": "swap"})
-        usdt = bal.get("USDT", {})
+        # ccxt 잔고 구조: bal["total"]["USDT"], bal["free"]["USDT"]
+        total_usdt = (
+            bal.get("USDT", {}).get("total")
+            or bal.get("total", {}).get("USDT")
+            or 0
+        )
+        free_usdt = (
+            bal.get("USDT", {}).get("free")
+            or bal.get("free", {}).get("USDT")
+            or 0
+        )
+        upnl = float(total_usdt or 0) - float(free_usdt or 0)
         return {
-            "equity":       usdt.get("total", 0),
-            "available":    usdt.get("free",  0),
-            "unrealizedPL": usdt.get("total", 0) - usdt.get("free", 0),
+            "equity":       float(total_usdt or 0),
+            "available":    float(free_usdt  or 0),
+            "unrealizedPL": upnl,
+            "todayProfitLoss": 0,
         }
 
     def get_positions(self, symbol: str = "BTCUSDT") -> list[dict]:
