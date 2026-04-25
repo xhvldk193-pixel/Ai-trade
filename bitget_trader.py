@@ -1,3 +1,4 @@
+
 """
 Bitget USDT-M Futures 자동매매 모듈 (ccxt 기반)
 TP/SL: Claude AI 피보나치 기반 목표가/손절가 직접 전달
@@ -29,10 +30,10 @@ class BitgetClient:
     def get_account(self, symbol: str = "BTCUSDT") -> dict:
         """USDT 선물 계좌 잔고 조회."""
         bal = self._ex.fetch_balance({"type": "swap"})
-        log.info("[Bitget] fetch_balance keys: %s", list(bal.keys()))
-        log.info("[Bitget] fetch_balance USDT: %s", bal.get("USDT"))
-        log.info("[Bitget] fetch_balance total: %s", bal.get("total"))
-        log.info("[Bitget] fetch_balance free: %s", bal.get("free"))
+        print("[Bitget-DEBUG] keys:", list(bal.keys()), flush=True)
+        print("[Bitget-DEBUG] USDT:", bal.get("USDT"), flush=True)
+        print("[Bitget-DEBUG] total:", bal.get("total"), flush=True)
+        print("[Bitget-DEBUG] info:", str(bal.get("info",""))[:300], flush=True)
 
         # ccxt 표준 구조 시도
         total_usdt = (
