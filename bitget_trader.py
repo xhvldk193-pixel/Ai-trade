@@ -29,6 +29,12 @@ class BitgetClient:
     def get_account(self, symbol: str = "BTCUSDT") -> dict:
         """USDT 선물 계좌 잔고 조회."""
         bal = self._ex.fetch_balance({"type": "swap"})
+        # info 리스트에서 먼저 파싱 (가장 안정적)
+        raw_info = bal.get("info")
+        if isinstance(raw_info, list):
+            for item in raw_info:
+                if isinstance(item, dict) and item.get("marginCoin") == "USDT":
+                    return {"equity": float(item.get("equity", item.get("usdtEquity", 0)) or 0), "available": float(item.get("available", 0) or 0), "unrealizedPL": float(item.get("unrealizedPL", 0) or 0), "todayProfitLoss": 0}
         # ccxt 표준 구조: bal["USDT"]["total"], bal["USDT"]["free"]
         usdt = bal.get("USDT") or {}
         total_usdt = float(usdt.get("total") or 0)
