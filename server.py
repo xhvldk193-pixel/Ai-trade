@@ -1535,9 +1535,21 @@ class ScheduleManager:
 
     async def _loop(self):
         while True:
-            wait_sec = self.INTERVAL_MIN * 60
-            next_dt  = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(seconds=wait_sec)
+            # 다음 정각(0, 4, 8, 12, 16, 20시 UTC) 까지 대기
+            now     = _dt.datetime.now(_dt.timezone.utc)
+            hour    = now.hour
+            # INTERVAL_MIN=240 기준 → 0,4,8,12,16,20시 정각
+            next_h  = ((hour // self.INTERVAL_MIN * 60 + 1) * self.INTERVAL_MIN * 60 // 60) % 24
+            # 실제로는 간격(시간)으로 다음 정각 계산
+            interval_h = self.INTERVAL_MIN // 60
+            next_h  = ((hour // interval_h) + 1) * interval_h % 24
+            next_dt = now.replace(minute=0, second=0, microsecond=0)
+            if next_h <= hour:
+                next_dt += _dt.timedelta(days=1)
+            next_dt = next_dt.replace(hour=next_h)
+            wait_sec = (next_dt - now).total_seconds()
             self._next_run_at = next_dt.isoformat()
+            print(f"[scheduler] 다음 실행: {next_dt.strftime('%Y-%m-%d %H:%M UTC')} ({int(wait_sec//60)}분 후)")
             try:
                 await asyncio.sleep(wait_sec)
             except asyncio.CancelledError:
@@ -1978,6 +1990,49 @@ async def market_sentiment_endpoint():
 
 @app.get("/api/account")
 async def account_endpoint():
+    """계좌 정보 — Bitget 키가 있으면 Bitget, 없으면 Binance 폴백."""
+    if _auto_trader is not None:
+        try:
+            acct = await asyncio.to_thread(_auto_trader.get_account)
+            positions = await asyncio.to_thread(_auto_trader.get_positions)
+
+            equity     = float(acct.get("equity",        0) or 0)
+            available  = float(acct.get("available",     0) or 0)
+            unrealized = float(acct.get("unrealizedPL",  0) or 0)
+            today_pnl  = float(acct.get("todayProfitLoss", 0) or 0)
+
+            pos_list = []
+            for p in positions:
+                hold   = p.get("holdSide", "")
+                total  = float(p.get("total", 0) or 0)
+                entry  = float(p.get("averageOpenPrice", 0) or 0)
+                pnl    = float(p.get("unrealizedPL", 0) or 0)
+                pnl_r  = float(p.get("unrealizedPLR", 0) or 0)
+                lev    = p.get("leverage", "–")
+                pos_list.append({
+                    "symbol":    DEFAULT_SYMBOL,
+                    "side":      hold,
+                    "size":      total,
+                    "entryPrice": entry,
+                    "unrealizedPnl": pnl,
+                    "roe":       round(pnl_r * 100, 2),
+                    "leverage":  lev,
+                })
+
+            return {
+                "source":         "bitget",
+                "totalWalletBalance":    equity,
+                "availableBalance":      available,
+                "totalUnrealizedProfit": unrealized,
+                "todayPnl":              today_pnl,
+                "positions":             pos_list,
+                "tradeCount":            len(pos_list),
+            }
+        except Exception as e:
+            import logging as _lg
+            _lg.getLogger("account").warning("Bitget 계좌 조회 실패, Binance 폴백: %s", e)
+
+    # Binance 폴백
     if _account_stream.is_ready():
         data = await _account_stream.get_snapshot()
     else:
