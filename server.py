@@ -2089,7 +2089,7 @@ async def account_endpoint():
             if equity > 0:
                 _cached_account = result
                 return result
-            elif _cached_account:
+            if _cached_account:
                 return _cached_account
             return result
         except Exception as e:
