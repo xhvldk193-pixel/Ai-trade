@@ -56,7 +56,7 @@ class BitgetClient:
         r = self._s.get(BITGET_BASE + fp, headers=self._headers("GET", fp), timeout=10)
         r.raise_for_status()
         d = r.json()
-        if d.get("code") != "00000":
+        if d.get("code") not in ("00000", "0"):
             raise RuntimeError(f"Bitget API 오류: {d.get('msg')} (code={d.get('code')})")
         return d
 
@@ -66,27 +66,28 @@ class BitgetClient:
                          data=bs, timeout=10)
         r.raise_for_status()
         d = r.json()
-        if d.get("code") != "00000":
+        if d.get("code") not in ("00000", "0"):
             raise RuntimeError(f"Bitget API 오류: {d.get('msg')} (code={d.get('code')})")
         return d
 
     # ── 계좌 ────────────────────────────────
     def get_account(self, symbol: str = "BTCUSDT", margin_coin: str = "USDT") -> dict:
-        return (self._get("/api/mix/v1/account/account",
-                          {"symbol": f"{symbol}_UMCBL", "marginCoin": margin_coin})
+        return (self._get("/api/v2/mix/account/account",
+                          {"symbol": f"{symbol}USDT", "productType": "USDT-FUTURES", "marginCoin": margin_coin})
                 .get("data", {}))
 
     def get_positions(self, symbol: str = "BTCUSDT", margin_coin: str = "USDT") -> list[dict]:
-        d = self._get("/api/mix/v1/position/singlePosition",
-                      {"symbol": f"{symbol}_UMCBL", "marginCoin": margin_coin})
+        d = self._get("/api/v2/mix/position/singlePosition",
+                      {"symbol": f"{symbol}USDT", "productType": "USDT-FUTURES", "marginCoin": margin_coin})
         raw = d.get("data") or []
         return [p for p in raw if float(p.get("total", 0)) > 0]
 
     # ── 레버리지 ────────────────────────────
     def set_leverage(self, symbol: str, leverage: int,
                      hold_side: str = "long", margin_coin: str = "USDT") -> dict:
-        return self._post("/api/mix/v1/account/setLeverage", {
-            "symbol":     f"{symbol}_UMCBL",
+        return self._post("/api/v2/mix/account/setLeverage", {
+            "symbol":     f"{symbol}USDT",
+            "productType": "USDT-FUTURES",
             "marginCoin": margin_coin,
             "leverage":   str(leverage),
             "holdSide":   hold_side,
@@ -97,7 +98,7 @@ class BitgetClient:
                     order_type: str = "market", price: Optional[float] = None,
                     margin_coin: str = "USDT") -> dict:
         body: dict = {
-            "symbol":           f"{symbol}_UMCBL",
+            "symbol":           f"{symbol}USDT",
             "marginCoin":       margin_coin,
             "size":             str(size),
             "side":             side,
@@ -106,7 +107,7 @@ class BitgetClient:
         }
         if order_type == "limit" and price is not None:
             body["price"] = str(price)
-        return self._post("/api/mix/v1/order/placeOrder", body)
+        return self._post("/api/v2/mix/order/placeOrder", body)
 
     def close_all(self, symbol: str, margin_coin: str = "USDT") -> list[dict]:
         """보유 포지션 전체 시장가 청산."""
@@ -126,8 +127,9 @@ class BitgetClient:
     def set_tp(self, symbol: str, trigger_price: float,
                hold_side: str, size: float, margin_coin: str = "USDT") -> dict:
         """익절(Take Profit) 플랜 주문 등록."""
-        return self._post("/api/mix/v1/plan/placeTpslOrder", {
-            "symbol":       f"{symbol}_UMCBL",
+        return self._post("/api/v2/mix/order/placeTpslOrder", {
+            "symbol":       f"{symbol}USDT",
+            "productType":  "USDT-FUTURES",
             "marginCoin":   margin_coin,
             "planType":     "profit_plan",
             "triggerPrice": str(trigger_price),
@@ -139,8 +141,9 @@ class BitgetClient:
     def set_sl(self, symbol: str, trigger_price: float,
                hold_side: str, size: float, margin_coin: str = "USDT") -> dict:
         """손절(Stop Loss) 플랜 주문 등록."""
-        return self._post("/api/mix/v1/plan/placeTpslOrder", {
-            "symbol":       f"{symbol}_UMCBL",
+        return self._post("/api/v2/mix/order/placeTpslOrder", {
+            "symbol":       f"{symbol}USDT",
+            "productType":  "USDT-FUTURES",
             "marginCoin":   margin_coin,
             "planType":     "loss_plan",
             "triggerPrice": str(trigger_price),
@@ -152,10 +155,10 @@ class BitgetClient:
     def cancel_all_tpsl(self, symbol: str, margin_coin: str = "USDT") -> dict:
         """기존 TP/SL 플랜 주문 전체 취소 (포지션 전환 시 호출)."""
         try:
-            return self._post("/api/mix/v1/plan/cancelAllPlanOrders", {
-                "symbol":     f"{symbol}_UMCBL",
+            return self._post("/api/v2/mix/order/cancelAllTpslOrder", {
+                "symbol":     f"{symbol}USDT",
+                "productType": "USDT-FUTURES",
                 "marginCoin": margin_coin,
-                "planType":   "profit_loss",
             })
         except Exception as e:
             log.warning("[Bitget] TP/SL 취소 실패(무시): %s", e)
