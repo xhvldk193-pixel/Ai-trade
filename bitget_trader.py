@@ -28,7 +28,13 @@ class BitgetClient:
 
     def get_account(self, symbol: str = "BTCUSDT") -> dict:
         """USDT 선물 계좌 잔고 조회."""
-        bal = self._ex.fetch_balance({"type": "swap"})
+        for attempt in range(3):
+            try:
+                bal = self._ex.fetch_balance({"type": "swap"})
+                break
+            except Exception as e:
+                if attempt == 2: raise
+                import time as _t; _t.sleep(1)
         print("[BAL]", bal.get("USDT"), str(bal.get("info",""))[:100], flush=True)
         # info 리스트에서 먼저 파싱 (가장 안정적)
         raw_info = bal.get("info")
