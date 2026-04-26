@@ -113,7 +113,11 @@ def _gen_code() -> str:
     return str(random.randint(100000, 999999))
 
 def _send_auth_code(code: str):
-    _tg(f"🔐 로그인 인증코드: {code}\n5분 내 입력하세요.")
+    import os as _os2, requests as _req2
+    t=_os2.environ.get("TELEGRAM_BOT_TOKEN","");c=_os2.environ.get("TELEGRAM_CHAT_ID","")
+    if t and c:
+        try:_req2.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":f"🔐 로그인 인증코드: {code}\n5분 내 입력하세요."},timeout=5)
+        except:pass
 
 @app.middleware("http")
 async def auth_middleware(request, call_next):
