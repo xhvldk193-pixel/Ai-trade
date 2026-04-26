@@ -2173,6 +2173,7 @@ async def market_sentiment_endpoint():
 
 @app.get("/api/account")
 async def account_endpoint():
+    print("[ACCT] auto_trader:", _auto_trader is not None, flush=True)
     """계좌 정보 — Bitget, 실패 시 캐시된 마지막 값 반환."""
     global _cached_account
     if _auto_trader is not None:
