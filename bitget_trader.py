@@ -26,56 +26,20 @@ class BitgetClient:
             },
         })
 
-    def get_account(self, symbol: str = "BTCUSDT") -> dict:
-        """USDT 선물 계좌 잔고 조회."""
+    def get_account(self, symbol="BTCUSDT"):
         for attempt in range(3):
             try:
                 bal = self._ex.fetch_balance({"type": "swap"})
-                break
+                usdt = bal.get("USDT") or {}
+                total = float(usdt.get("total") or 0)
+                free = float(usdt.get("free") or 0)
+                if total > 0:
+                    return {"equity": total, "available": free, "unrealizedPL": 0.0, "todayProfitLoss": 0}
             except Exception as e:
                 if attempt == 2: raise
                 import time as _t; _t.sleep(1)
-        print("[BAL]", bal.get("USDT"), str(bal.get("info",""))[:100], flush=True)
-        # info 리스트에서 먼저 파싱 (가장 안정적)
-        raw_info = bal.get("info")
-        if isinstance(raw_info, list):
-            for item in raw_info:
-                if isinstance(item, dict) and item.get("marginCoin") == "USDT":
-                    return {"equity": float(item.get("equity", item.get("usdtEquity", 0)) or 0), "available": float(item.get("available", 0) or 0), "unrealizedPL": float(item.get("unrealizedPL", 0) or 0), "todayProfitLoss": 0}
-        # ccxt 표준 구조: bal["USDT"]["total"], bal["USDT"]["free"]
-        usdt = bal.get("USDT") or {}
-        total_usdt = float(usdt.get("total") or 0)
-        free_usdt  = float(usdt.get("free")  or 0)
+        return {"equity": 0, "available": 0, "unrealizedPL": 0.0, "todayProfitLoss": 0}
 
-        # info가 list로 올 때 직접 파싱
-        upnl = 0.0
-        raw_info = bal.get("info")
-        if isinstance(raw_info, list):
-            # info 자체가 계좌 리스트
-            for item in raw_info:
-                if isinstance(item, dict) and item.get("marginCoin") == "USDT":
-                    if not total_usdt:
-                        total_usdt = float(item.get("equity", item.get("usdtEquity", 0)) or 0)
-                        free_usdt  = float(item.get("available", 0) or 0)
-                    upnl = float(item.get("unrealizedPL", 0) or 0)
-                    break
-        elif isinstance(raw_info, dict):
-            data = raw_info.get("data", [])
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict) and item.get("marginCoin") == "USDT":
-                        if not total_usdt:
-                            total_usdt = float(item.get("equity", 0) or 0)
-                            free_usdt  = float(item.get("available", 0) or 0)
-                        upnl = float(item.get("unrealizedPL", 0) or 0)
-                        break
-
-        return {
-            "equity":          total_usdt,
-            "available":       free_usdt,
-            "unrealizedPL":    upnl,
-            "todayProfitLoss": 0,
-        }
 
     def get_positions(self, symbol: str = "BTCUSDT") -> list[dict]:
         """현재 오픈 포지션 조회."""
