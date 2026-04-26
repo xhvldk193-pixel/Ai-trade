@@ -2198,7 +2198,12 @@ async def account_endpoint():
                 total  = float(p.get("total", 0) or 0)
                 entry  = float(p.get("averageOpenPrice", 0) or 0)
                 pnl    = float(p.get("unrealizedPL", 0) or 0)
-                pnl_r  = float(p.get("unrealizedPLR", 0) or 0)
+                # ROE 직접 계산: pnl / (size * entry / leverage)
+                try:
+                    margin = (total * entry) / float(lev) if float(str(lev)) > 0 else 0
+                    pnl_r = (pnl / margin) if margin > 0 else 0
+                except:
+                    pnl_r = 0
                 lev    = p.get("leverage", "–")
                 pos_list.append({
                     "symbol":        DEFAULT_SYMBOL,
