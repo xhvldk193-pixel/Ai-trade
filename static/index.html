@@ -3342,7 +3342,9 @@ function startAccountStream() {
     if (state.accountSource !== es) return;
     const msg = JSON.parse(e.data);
     if (msg.type === "snapshot" || msg.type === "account") {
-      applyAccountData(msg.data);
+      if (!state.account || state.account.source !== "bitget") {
+        applyAccountData(msg.data);
+      }
     }
   };
 
