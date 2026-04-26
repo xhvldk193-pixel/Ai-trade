@@ -2179,6 +2179,7 @@ async def account_endpoint():
     if _auto_trader is not None:
         try:
             acct = await asyncio.to_thread(_auto_trader.get_account)
+            print("[ACCT-VAL]", acct, flush=True)
             positions = await asyncio.to_thread(_auto_trader.get_positions)
 
             equity     = float(acct.get("equity",          0) or 0)
