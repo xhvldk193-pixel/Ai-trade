@@ -12,6 +12,7 @@ import functools
 import json
 import math
 import os
+import random
 import time
 import uuid
 
@@ -102,6 +103,142 @@ FIB_COLORS = {
 }
 
 app = FastAPI()
+
+# ── 2단계 인증 ────────────────────────────
+import secrets
+_pending_codes = {}  # {code: expire_time}
+_auth_sessions = set()  # 인증된 세션 토큰
+
+def _gen_code() -> str:
+    return str(random.randint(100000, 999999))
+
+def _send_auth_code(code: str):
+    _tg(f"🔐 로그인 인증코드: {code}\n5분 내 입력하세요.")
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    path = request.url.path
+    # 정적 파일, 인증 엔드포인트는 통과
+    if path in ("/auth/login", "/auth/verify", "/auth/check"):
+        return await call_next(request)
+    
+    # 세션 토큰 확인
+    token = request.cookies.get("session_token")
+    if token and token in _auth_sessions:
+        return await call_next(request)
+    
+    # 미인증 → 로그인 페이지
+    if path == "/" or not path.startswith("/api"):
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(_login_html())
+    
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+@app.post("/auth/login")
+async def auth_login(request: Request):
+    body = await request.json()
+    pw = body.get("password", "")
+    site_pw = os.environ.get("SITE_PASSWORD", "")
+    if not site_pw or pw != site_pw:
+        return {"ok": False, "error": "비밀번호 오류"}
+    code = _gen_code()
+    expire = time.time() + 300  # 5분
+    _pending_codes[code] = expire
+    _send_auth_code(code)
+    return {"ok": True}
+
+@app.post("/auth/verify")
+async def auth_verify(request: Request):
+    body = await request.json()
+    code = body.get("code", "")
+    now = time.time()
+    # 만료 코드 정리
+    expired = [k for k, v in _pending_codes.items() if v < now]
+    for k in expired: del _pending_codes[k]
+    
+    if code in _pending_codes:
+        del _pending_codes[code]
+        token = secrets.token_hex(32)
+        _auth_sessions.add(token)
+        from fastapi.responses import JSONResponse
+        resp = JSONResponse({"ok": True})
+        resp.set_cookie("session_token", token, httponly=True, max_age=86400*7)
+        return resp
+    return {"ok": False, "error": "코드 오류 또는 만료"}
+
+@app.get("/auth/check")
+async def auth_check(request: Request):
+    token = request.cookies.get("session_token")
+    return {"ok": bool(token and token in _auth_sessions)}
+
+def _login_html():
+    return """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>로그인</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0d0d1a; color: #dce1f0; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.box { background: #12122a; border: 1px solid #3a3a6a; border-radius: 16px; padding: 32px; width: min(380px, 94vw); }
+h2 { font-size: 18px; margin-bottom: 24px; color: #a0a8f8; text-align: center; }
+input { width: 100%; padding: 12px; background: #1c1c3e; border: 1px solid #3a3a6a; border-radius: 8px; color: #e0e6ff; font-size: 16px; margin-bottom: 12px; }
+button { width: 100%; padding: 12px; background: #3030a0; color: #e0e6ff; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; }
+.msg { font-size: 13px; text-align: center; margin-top: 10px; min-height: 18px; }
+.step2 { display: none; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h2>🔐 AI 자동매매</h2>
+  <div id="step1">
+    <input type="password" id="pw" placeholder="비밀번호" autocomplete="current-password">
+    <button onclick="doLogin()">로그인</button>
+    <div class="msg" id="msg1"></div>
+  </div>
+  <div id="step2" class="step2">
+    <p style="margin-bottom:12px;font-size:13px;color:#9098c0;text-align:center">텔레그램으로 전송된 6자리 코드를 입력하세요</p>
+    <input type="text" id="code" placeholder="123456" maxlength="6" inputmode="numeric">
+    <button onclick="doVerify()">확인</button>
+    <div class="msg" id="msg2"></div>
+  </div>
+</div>
+<script>
+async function doLogin() {
+  const pw = document.getElementById('pw').value;
+  const r = await fetch('/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({password: pw})});
+  const d = await r.json();
+  if (d.ok) {
+    document.getElementById('step1').style.display='none';
+    document.getElementById('step2').style.display='block';
+  } else {
+    document.getElementById('msg1').textContent = '비밀번호 오류';
+    document.getElementById('msg1').style.color = '#ff5252';
+  }
+}
+async function doVerify() {
+  const code = document.getElementById('code').value;
+  const r = await fetch('/auth/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({code: code})});
+  const d = await r.json();
+  if (d.ok) {
+    location.reload();
+  } else {
+    document.getElementById('msg2').textContent = '코드 오류 또는 만료';
+    document.getElementById('msg2').style.color = '#ff5252';
+  }
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    if (document.getElementById('step2').style.display === 'block') doVerify();
+    else doLogin();
+  }
+});
+</script>
+</body>
+</html>"""
+
 # 분석(Claude API) + 데이터 fetch가 동시에 실행될 수 있도록 워커 수 충분히 확보
 # 기본 4개는 분석 1건만으로 전부 포화 → CPU 코어 × 4 또는 최소 16
 _executor = concurrent.futures.ThreadPoolExecutor(
