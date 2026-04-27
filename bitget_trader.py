@@ -34,7 +34,19 @@ class BitgetClient:
                 total = float(usdt.get("total") or 0)
                 free = float(usdt.get("free") or 0)
                 if total > 0:
-                    return {"equity": total, "available": free, "unrealizedPL": 0.0, "todayProfitLoss": 0}
+                    # 오늘 손익 조회
+                    today_pnl = 0.0
+                    try:
+                        import datetime as _dt
+                        today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+                        pnl_data = self._ex.fetch_my_trades(
+                            f"{symbol}/USDT:USDT",
+                            params={"productType": "USDT-FUTURES", "startTime": today}
+                        )
+                        today_pnl = sum(float(t.get("info", {}).get("profit", 0) or 0) for t in pnl_data)
+                    except:
+                        pass
+                    return {"equity": total, "available": free, "unrealizedPL": 0.0, "todayProfitLoss": today_pnl}
             except Exception as e:
                 if attempt == 2: raise
                 import time as _t; _t.sleep(1)
