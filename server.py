@@ -2428,7 +2428,56 @@ async def analysis_history_endpoint(limit: int = 100):
 
 @app.get("/api/performance")
 async def performance_endpoint(days: int = 30):
-    """account_history.jsonl 기반 성과 지표 반환."""
+    """비트겟 거래 내역 기반 성과 지표 반환."""
+    if _auto_trader is None:
+        return {"error": "자동매매 미설정", "daily": [], "snapshots": []}
+    days = max(1, min(days, 365))
+    try:
+        trades = await asyncio.to_thread(_auto_trader.get_trade_history, "BTCUSDT", days)
+    except Exception as e:
+        return {"error": str(e), "daily": [], "snapshots": []}
+
+    from collections import defaultdict
+    import datetime as _dt
+    from time_utils import format_kst
+
+    daily_map = defaultdict(lambda: {"pnl": 0.0, "trades": 0, "wins": 0})
+    for t in trades:
+        try:
+            ts = _dt.datetime.fromtimestamp(int(t.get("timestamp", 0)) / 1000, tz=_dt.timezone.utc)
+            day_key = format_kst(ts, "%Y-%m-%d")
+            profit = float(t.get("info", {}).get("profit", 0) or 0)
+            daily_map[day_key]["pnl"] += profit
+            daily_map[day_key]["trades"] += 1
+            if profit > 0:
+                daily_map[day_key]["wins"] += 1
+        except:
+            pass
+
+    daily = []
+    for day_key in sorted(daily_map.keys()):
+        d = daily_map[day_key]
+        daily.append({
+            "date": day_key,
+            "pnl": round(d["pnl"], 4),
+            "trades": d["trades"],
+            "wins": d["wins"],
+        })
+
+    total_pnl = sum(d["pnl"] for d in daily)
+    total_trades = sum(d["trades"] for d in daily)
+    total_wins = sum(d["wins"] for d in daily)
+
+    return {
+        "daily": daily,
+        "snapshots": [],
+        "total_pnl": round(total_pnl, 4),
+        "total_trades": total_trades,
+        "win_rate": round(total_wins / total_trades * 100, 1) if total_trades > 0 else 0,
+    }
+
+    days = max(1, min(days, 365))  # dead code — replaced above
+    if False:
     from datetime import datetime, timezone, timedelta
     # 방어적 경계 — 최대 1년, 최소 1일.
     days = max(1, min(days, 365))

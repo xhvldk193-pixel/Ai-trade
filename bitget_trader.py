@@ -53,6 +53,21 @@ class BitgetClient:
                 import time as _t; _t.sleep(1)
         return {"equity": 0, "available": 0, "unrealizedPL": 0.0, "todayProfitLoss": 0}
 
+    def get_trade_history(self, symbol: str = "BTCUSDT", days: int = 30) -> list:
+        """비트겟 거래 내역 조회 (days일치)."""
+        import datetime as _dt
+        now = _dt.datetime.utcnow()
+        start_ts = int((now - _dt.timedelta(days=days)).timestamp() * 1000)
+        try:
+            trades = self._ex.fetch_my_trades(
+                "BTC/USDT:USDT",
+                params={"productType": "USDT-FUTURES", "startTime": str(start_ts)}
+            )
+            return trades
+        except Exception as e:
+            print(f"[TRADE-HISTORY-ERR] {e}", flush=True)
+            return []
+
     def get_positions(self, symbol: str = "BTCUSDT") -> list[dict]:
         ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
         positions = self._ex.fetch_positions([ccxt_symbol])
