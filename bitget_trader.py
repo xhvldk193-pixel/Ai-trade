@@ -97,8 +97,9 @@ class BitgetClient:
         params = {
             "tdMode":       "cross",
             "posSide":      pos_side,
-            "reduceOnly":   side.startswith("close"),
         }
+        if side.startswith("close"):
+            params["reduceOnly"] = True
         return self._ex.create_order(
             ccxt_symbol, order_type, ccxt_side, size, params=params
         )
