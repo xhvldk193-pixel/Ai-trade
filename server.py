@@ -22,6 +22,13 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
+import os as _os, requests as _req
+def _tg(msg):
+    t=_os.environ.get("TELEGRAM_BOT_TOKEN","");c=_os.environ.get("TELEGRAM_CHAT_ID","")
+    if t and c:
+        try:_req.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":msg,"parse_mode":"HTML"},timeout=5)
+        except:pass
+
 import config as runtime_config
 from config import (
     CANDLE_LIMIT, DEFAULT_SYMBOL, TIMEFRAMES, symbol_to_pair,
