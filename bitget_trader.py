@@ -289,6 +289,7 @@ class BitgetAutoTrader:
             except Exception as e:
                 log.warning("[AutoTrader] TP 등록 실패: %s", e)
                 result["tp_order"] = {"error": str(e)}
+                self._tg_alert(f"⚠️ TP 등록 실패\n{type(e).__name__}: {str(e)[:200]}")
 
         if self.use_sl and sl:
             try:
@@ -296,9 +297,17 @@ class BitgetAutoTrader:
             except Exception as e:
                 log.warning("[AutoTrader] SL 등록 실패: %s", e)
                 result["sl_order"] = {"error": str(e)}
+                self._tg_alert(f"⚠️ SL 등록 실패\n{type(e).__name__}: {str(e)[:200]}")
 
         self._last = result
         return result
+
+    def _tg_alert(self, msg):
+        import os, requests
+        t=os.environ.get("TELEGRAM_BOT_TOKEN","");c=os.environ.get("TELEGRAM_CHAT_ID","")
+        if t and c:
+            try: requests.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":msg},timeout=5)
+            except: pass
 
     def last_result(self):  return dict(self._last)
     def get_positions(self): return self.client.get_positions(self.symbol)
