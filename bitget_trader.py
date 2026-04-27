@@ -72,19 +72,25 @@ class BitgetClient:
     def set_leverage(self, symbol: str, leverage: int, hold_side: str = "long") -> dict:
         ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
         try:
-            return self._ex.set_leverage(leverage, ccxt_symbol, {"holdSide": hold_side})
+            return self._ex.set_leverage(leverage, ccxt_symbol, {
+                "holdSide":    hold_side,
+                "productType": "USDT-FUTURES",
+            })
         except Exception as e:
             log.warning("[Bitget] 레버리지 설정 실패: %s", e)
             return {}
 
     def set_margin_mode(self, symbol: str, hold_side: str = "long") -> dict:
-        """독립(isolated) 마진 모드 설정"""
+        """Isolated(독립) 마진 모드 설정 - Futures 전용"""
         ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
         try:
             return self._ex.set_margin_mode(
                 "isolated",
                 ccxt_symbol,
-                {"holdSide": hold_side}
+                {
+                    "productType": "USDT-FUTURES",
+                    "holdSide":    hold_side,
+                }
             )
         except Exception as e:
             log.warning("[Bitget] 마진모드 설정 실패(무시): %s", e)
@@ -104,8 +110,9 @@ class BitgetClient:
         }
         ccxt_side, pos_side = action_map.get(side, ("buy", "long"))
         params = {
-            "marginMode":   "isolated",   # 독립 마진
-            "holdSide":     pos_side,
+            "productType": "USDT-FUTURES",
+            "marginCoin":  "USDT",
+            "holdSide":    pos_side,
         }
         if side.startswith("close"):
             params["reduceOnly"] = True
@@ -114,6 +121,7 @@ class BitgetClient:
         )
 
     def close_all(self, symbol: str) -> list[dict]:
+        """전체 포지션 시장가 청산."""
         positions = self.get_positions(symbol)
         results = []
         for p in positions:
@@ -129,6 +137,7 @@ class BitgetClient:
         return results
 
     def _rest_post(self, path: str, body: dict) -> dict:
+        """Bitget REST API 직접 호출 (ccxt 우회)."""
         import hmac, hashlib, base64, time as _t, json as _json, requests as _req
         api_key    = self._ex.apiKey
         secret     = self._ex.secret
@@ -155,6 +164,7 @@ class BitgetClient:
 
     def set_tp(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
+        """익절(TP) 주문 등록."""
         try:
             return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
                 "symbol":       f"{symbol}USDT",
@@ -172,6 +182,7 @@ class BitgetClient:
 
     def set_sl(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
+        """손절(SL) 주문 등록."""
         try:
             return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
                 "symbol":       f"{symbol}USDT",
@@ -188,12 +199,30 @@ class BitgetClient:
             raise
 
     def cancel_all_tpsl(self, symbol: str) -> dict:
+        """TP/SL 플랜 주문 전체 취소."""
         try:
             ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
-            return self._ex.cancel_all_orders(ccxt_symbol, params={"planType": "profit_loss"})
+            return self._ex.cancel_all_orders(ccxt_symbol, params={
+                "planType":    "profit_loss",
+                "productType": "USDT-FUTURES",
+            })
         except Exception as e:
             log.warning("[Bitget] TP/SL 취소 실패(무시): %s", e)
             return {}
+
+    def _tg_alert(self, msg: str):
+        import os, requests
+        t = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        c = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if t and c:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{t}/sendMessage",
+                    json={"chat_id": c, "text": msg},
+                    timeout=5
+                )
+            except:
+                pass
 
 
 # ──────────────────────────────────────────
@@ -280,7 +309,7 @@ class BitgetAutoTrader:
             self.client.close_all(self.symbol)
             time.sleep(0.8)
 
-        # 독립 마진 + 레버리지 설정
+        # 독립(Isolated) 마진 + 레버리지 설정
         for hs in ("long", "short"):
             self.client.set_margin_mode(self.symbol, hs)
             self.client.set_leverage(self.symbol, self.leverage, hs)
@@ -322,10 +351,17 @@ class BitgetAutoTrader:
 
     def _tg_alert(self, msg):
         import os, requests
-        t=os.environ.get("TELEGRAM_BOT_TOKEN",""); c=os.environ.get("TELEGRAM_CHAT_ID","")
+        t = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        c = os.environ.get("TELEGRAM_CHAT_ID", "")
         if t and c:
-            try: requests.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":msg},timeout=5)
-            except: pass
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{t}/sendMessage",
+                    json={"chat_id": c, "text": msg},
+                    timeout=5
+                )
+            except:
+                pass
 
     def last_result(self):   return dict(self._last)
     def get_positions(self): return self.client.get_positions(self.symbol)
