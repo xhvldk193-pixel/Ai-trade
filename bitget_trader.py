@@ -65,12 +65,8 @@ class BitgetClient:
             entry = float(p.get("entryPrice") or 0)
             mark  = float(p.get("markPrice") or 0)
 
-            # ccxt unrealizedPnl 사용 (부호 보정)
-            raw_pnl = float(p.get("unrealizedPnl") or 0)
-            if side == "short":
-                unrealized_pnl = -raw_pnl
-            else:
-                unrealized_pnl = raw_pnl
+            # ccxt unrealizedPnl 그대로 사용
+            unrealized_pnl = float(p.get("unrealizedPnl") or 0)
 
             pct = p.get("percentage")
             unrealized_pnl_r = float(pct) / 100 if pct is not None else 0.0
