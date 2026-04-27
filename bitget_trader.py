@@ -139,7 +139,9 @@ class BitgetClient:
         r = _req.post("https://api.bitget.com" + path, headers=headers, data=body_str, timeout=10)
         d = r.json()
         if d.get("code") not in ("00000", "0"):
-            raise RuntimeError(f"Bitget: {d.get('msg')} ({d.get('code')})")
+            err = f"Bitget: {d.get('msg')} ({d.get('code')})"
+            self._tg_alert(f"⚠️ Bitget API 오류\n{err}")
+            raise RuntimeError(err)
         return d
 
     def set_tp(self, symbol: str, trigger_price: float,
