@@ -151,7 +151,7 @@ class BitgetClient:
             "orderType":   order_type,
             "force":       "gtc",
         }
-        return self._rest_post("/api/v2/mix/order/place-order", body)
+        return self._rest_post("/api/v2/mix/order/placeOrder", body)
 
     def close_all(self, symbol: str) -> list[dict]:
         """전체 포지션 시장가 청산."""
