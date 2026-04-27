@@ -152,7 +152,6 @@ class BitgetClient:
             "planType":     "profit_plan",
             "triggerPrice": str(trigger_price),
             "triggerType":  "fill_price",
-            "orderType":    "market",
             "size":         str(size),
         })
 
@@ -166,7 +165,6 @@ class BitgetClient:
             "planType":     "loss_plan",
             "triggerPrice": str(trigger_price),
             "triggerType":  "fill_price",
-            "orderType":    "market",
             "size":         str(size),
         })
 
