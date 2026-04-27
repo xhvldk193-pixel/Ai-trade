@@ -144,11 +144,10 @@ class BitgetClient:
         body = {
             "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
             "productType": "USDT-FUTURES",
-            "marginMode":  "crossed",
+            "marginMode":  "isolated",
             "marginCoin":  "USDT",
             "size":        str(size),
             "side":        trade_side,
-            "holdSide":    hold_side,
             "orderType":   order_type,
             "force":       "gtc",
         }
