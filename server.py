@@ -2433,7 +2433,7 @@ async def performance_endpoint(days: int = 30):
         return {"error": "자동매매 미설정", "daily": [], "snapshots": []}
     days = max(1, min(days, 365))
     try:
-        trades = await asyncio.to_thread(_auto_trader.get_trade_history, "BTCUSDT", days)
+        trades = await asyncio.to_thread(_auto_trader.client.get_trade_history, "BTCUSDT", days)
     except Exception as e:
         return {"error": str(e), "daily": [], "snapshots": []}
 
