@@ -60,7 +60,8 @@ class BitgetClient:
             if contracts <= 0:
                 continue
 
-            side = p.get("side", "")
+            side = p.get("side", "") or p.get("info", {}).get("holdSide", "")
+            print(f"[SIDE] side={side} contracts={contracts}", flush=True)
             entry = float(p.get("entryPrice") or 0)
             mark  = float(p.get("markPrice") or 0)
 
