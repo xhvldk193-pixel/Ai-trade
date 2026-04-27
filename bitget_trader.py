@@ -142,7 +142,7 @@ class BitgetClient:
         }
         trade_side, hold_side = action_map.get(side, ("buy", "long"))
         body = {
-            "symbol":      f"{symbol}USDT",
+            "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
             "productType": "USDT-FUTURES",
             "marginMode":  "crossed",
             "marginCoin":  "USDT",
