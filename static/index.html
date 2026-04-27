@@ -3727,7 +3727,7 @@ function applyLiveBtcPositionMarks(price) {
     }
 
     const livePrice = Number(price);
-    const upnl = pos.side === "숏"
+    const upnl = (pos.side === "숏" || pos.side === "short")
       ? (entry - livePrice) * size
       : (livePrice - entry) * size;
     const margin = lev > 0 ? notional / lev : 0;
