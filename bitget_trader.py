@@ -20,9 +20,9 @@ class BitgetClient:
         self._ex = ccxt.bitget({
             "apiKey":     api_key,
             "secret":     secret_key,
-            "password":   passphrase,   # Bitget passphrase
+            "password":   passphrase,
             "options": {
-                "defaultType": "swap",  # USDT-M Futures
+                "defaultType": "swap",
             },
         })
 
@@ -34,7 +34,6 @@ class BitgetClient:
                 total = float(usdt.get("total") or 0)
                 free = float(usdt.get("free") or 0)
                 if total > 0:
-                    # 오늘 손익 조회
                     today_pnl = 0.0
                     try:
                         import datetime as _dt
@@ -52,10 +51,8 @@ class BitgetClient:
                 import time as _t; _t.sleep(1)
         return {"equity": 0, "available": 0, "unrealizedPL": 0.0, "todayProfitLoss": 0}
 
-
     def get_positions(self, symbol: str = "BTCUSDT") -> list[dict]:
-        """현재 오픈 포지션 조회."""
-        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"  # BTC/USDT:USDT
+        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
         positions = self._ex.fetch_positions([ccxt_symbol])
         result = []
         for p in positions:
@@ -80,13 +77,25 @@ class BitgetClient:
             log.warning("[Bitget] 레버리지 설정 실패: %s", e)
             return {}
 
+    def set_margin_mode(self, symbol: str, hold_side: str = "long") -> dict:
+        """독립(isolated) 마진 모드 설정"""
+        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
+        try:
+            return self._ex.set_margin_mode(
+                "isolated",
+                ccxt_symbol,
+                {"holdSide": hold_side}
+            )
+        except Exception as e:
+            log.warning("[Bitget] 마진모드 설정 실패(무시): %s", e)
+            return {}
+
     def place_order(self, symbol: str, side: str, size: float,
                     order_type: str = "market") -> dict:
         """
         side: "open_long" | "open_short" | "close_long" | "close_short"
         """
         ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
-        # ccxt side/positionSide 변환
         action_map = {
             "open_long":   ("buy",  "long"),
             "open_short":  ("sell", "short"),
@@ -95,8 +104,8 @@ class BitgetClient:
         }
         ccxt_side, pos_side = action_map.get(side, ("buy", "long"))
         params = {
-            "tdMode":       "cross",
-            "posSide":      pos_side,
+            "marginMode":   "isolated",   # 독립 마진
+            "holdSide":     pos_side,
         }
         if side.startswith("close"):
             params["reduceOnly"] = True
@@ -105,7 +114,6 @@ class BitgetClient:
         )
 
     def close_all(self, symbol: str) -> list[dict]:
-        """전체 포지션 시장가 청산."""
         positions = self.get_positions(symbol)
         results = []
         for p in positions:
@@ -121,21 +129,20 @@ class BitgetClient:
         return results
 
     def _rest_post(self, path: str, body: dict) -> dict:
-        """Bitget REST API 직접 호출 (ccxt 우회)."""
         import hmac, hashlib, base64, time as _t, json as _json, requests as _req
-        api_key = self._ex.apiKey
-        secret  = self._ex.secret
+        api_key    = self._ex.apiKey
+        secret     = self._ex.secret
         passphrase = self._ex.password
         ts = str(int(_t.time() * 1000))
         body_str = _json.dumps(body)
-        pre = ts + "POST" + path + body_str
+        pre  = ts + "POST" + path + body_str
         sign = base64.b64encode(hmac.new(secret.encode(), pre.encode(), hashlib.sha256).digest()).decode()
         headers = {
-            "ACCESS-KEY": api_key,
-            "ACCESS-SIGN": sign,
-            "ACCESS-TIMESTAMP": ts,
+            "ACCESS-KEY":        api_key,
+            "ACCESS-SIGN":       sign,
+            "ACCESS-TIMESTAMP":  ts,
             "ACCESS-PASSPHRASE": passphrase,
-            "Content-Type": "application/json",
+            "Content-Type":      "application/json",
         }
         print(f"[REST] {path} {body_str}", flush=True)
         r = _req.post("https://api.bitget.com" + path, headers=headers, data=body_str, timeout=10)
@@ -148,7 +155,6 @@ class BitgetClient:
 
     def set_tp(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
-        """익절(TP) 주문 등록."""
         try:
             return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
                 "symbol":       f"{symbol}USDT",
@@ -157,16 +163,15 @@ class BitgetClient:
                 "planType":     "profit_plan",
                 "triggerPrice": str(trigger_price),
                 "triggerType":  "mark_price",
+                "holdSide":     hold_side,
                 "size":         str(size),
             })
         except Exception as e:
             self._tg_alert(f"⚠️ TP 등록 실패\n{str(e)[:200]}")
             raise
 
-
     def set_sl(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
-        """손절(SL) 주문 등록."""
         try:
             return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
                 "symbol":       f"{symbol}USDT",
@@ -175,15 +180,14 @@ class BitgetClient:
                 "planType":     "loss_plan",
                 "triggerPrice": str(trigger_price),
                 "triggerType":  "mark_price",
+                "holdSide":     hold_side,
                 "size":         str(size),
             })
         except Exception as e:
             self._tg_alert(f"⚠️ SL 등록 실패\n{str(e)[:200]}")
             raise
 
-
     def cancel_all_tpsl(self, symbol: str) -> dict:
-        """TP/SL 플랜 주문 전체 취소."""
         try:
             ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
             return self._ex.cancel_all_orders(ccxt_symbol, params={"planType": "profit_loss"})
@@ -276,7 +280,9 @@ class BitgetAutoTrader:
             self.client.close_all(self.symbol)
             time.sleep(0.8)
 
+        # 독립 마진 + 레버리지 설정
         for hs in ("long", "short"):
+            self.client.set_margin_mode(self.symbol, hs)
             self.client.set_leverage(self.symbol, self.leverage, hs)
 
         tp, sl = self._extract_tpsl(desired, price, trade_levels)
@@ -303,7 +309,6 @@ class BitgetAutoTrader:
             except Exception as e:
                 log.warning("[AutoTrader] TP 등록 실패: %s", e)
                 result["tp_order"] = {"error": str(e)}
-                self._tg_alert(f"⚠️ TP 등록 실패\n{type(e).__name__}: {str(e)[:200]}")
 
         if self.use_sl and sl:
             try:
@@ -311,19 +316,18 @@ class BitgetAutoTrader:
             except Exception as e:
                 log.warning("[AutoTrader] SL 등록 실패: %s", e)
                 result["sl_order"] = {"error": str(e)}
-                self._tg_alert(f"⚠️ SL 등록 실패\n{type(e).__name__}: {str(e)[:200]}")
 
         self._last = result
         return result
 
     def _tg_alert(self, msg):
         import os, requests
-        t=os.environ.get("TELEGRAM_BOT_TOKEN","");c=os.environ.get("TELEGRAM_CHAT_ID","")
+        t=os.environ.get("TELEGRAM_BOT_TOKEN",""); c=os.environ.get("TELEGRAM_CHAT_ID","")
         if t and c:
             try: requests.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":msg},timeout=5)
             except: pass
 
-    def last_result(self):  return dict(self._last)
+    def last_result(self):   return dict(self._last)
     def get_positions(self): return self.client.get_positions(self.symbol)
     def get_account(self):   return self.client.get_account(self.symbol)
     def close_all(self):
