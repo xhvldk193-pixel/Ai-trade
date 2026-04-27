@@ -738,7 +738,9 @@ def run_full_analysis(
     if get_agent_memories is not None:
         try:
             agent_memories_obj = get_agent_memories()
+            print(f"[AGENTMEM] OK: {agent_memories_obj}", flush=True)
         except Exception as exc:
+            print(f"[AGENTMEM-ERR] {exc}", flush=True)
             _memory_logger.warning("get_agent_memories 실패 — %s", exc)
 
     # 쿼리로는 정규화 태그를 쓰고, 태그가 없으면 blob 앞 200자만 사용
