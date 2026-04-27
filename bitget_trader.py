@@ -37,10 +37,12 @@ class BitgetClient:
                     today_pnl = 0.0
                     try:
                         import datetime as _dt
-                        today = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+                        # 오늘 00:00 UTC 타임스탬프 (밀리초)
+                        now = _dt.datetime.utcnow()
+                        start_ts = int(_dt.datetime(now.year, now.month, now.day).timestamp() * 1000)
                         pnl_data = self._ex.fetch_my_trades(
                             f"{symbol}/USDT:USDT",
-                            params={"productType": "USDT-FUTURES", "startTime": today}
+                            params={"productType": "USDT-FUTURES", "startTime": str(start_ts)}
                         )
                         today_pnl = sum(float(t.get("info", {}).get("profit", 0) or 0) for t in pnl_data)
                     except:
