@@ -134,24 +134,25 @@ class BitgetClient:
         """
         side: "open_long" | "open_short" | "close_long" | "close_short"
         """
-        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
         action_map = {
             "open_long":   ("buy",  "long"),
             "open_short":  ("sell", "short"),
             "close_long":  ("sell", "long"),
             "close_short": ("buy",  "short"),
         }
-        ccxt_side, pos_side = action_map.get(side, ("buy", "long"))
-        params = {
+        trade_side, hold_side = action_map.get(side, ("buy", "long"))
+        body = {
+            "symbol":      f"{symbol}USDT",
             "productType": "USDT-FUTURES",
+            "marginMode":  "crossed",
             "marginCoin":  "USDT",
-            "holdSide":    pos_side,
+            "size":        str(size),
+            "side":        trade_side,
+            "holdSide":    hold_side,
+            "orderType":   order_type,
+            "force":       "gtc",
         }
-        if side.startswith("close"):
-            params["reduceOnly"] = True
-        return self._ex.create_order(
-            ccxt_symbol, order_type, ccxt_side, size, params=params
-        )
+        return self._rest_post("/api/v2/mix/order/place-order", body)
 
     def close_all(self, symbol: str) -> list[dict]:
         """전체 포지션 시장가 청산."""
