@@ -45,8 +45,8 @@ class BitgetClient:
                             params={"productType": "USDT-FUTURES", "startTime": str(start_ts)}
                         )
                         today_pnl = sum(float(t.get("info", {}).get("profit", 0) or 0) for t in pnl_data)
-                    except:
-                        pass
+                    except Exception as pnl_err:
+                        print(f"[PNL-ERR] {pnl_err}", flush=True)
                     return {"equity": total, "available": free, "unrealizedPL": 0.0, "todayProfitLoss": today_pnl}
             except Exception as e:
                 if attempt == 2: raise
