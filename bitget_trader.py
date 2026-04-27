@@ -65,16 +65,12 @@ class BitgetClient:
             entry = float(p.get("entryPrice") or 0)
             mark  = float(p.get("markPrice") or 0)
 
-            # ── 미실현 손익 직접 계산 (ccxt 부호 버그 방지) ──
-            if entry > 0 and mark > 0:
-                if side == "short":
-                    unrealized_pnl = (entry - mark) * contracts
-                else:
-                    unrealized_pnl = (mark - entry) * contracts
+            # ccxt unrealizedPnl 사용 (부호 보정)
+            raw_pnl = float(p.get("unrealizedPnl") or 0)
+            if side == "short":
+                unrealized_pnl = -raw_pnl
             else:
-                # fallback: ccxt 값 사용하되 숏은 부호 보정
-                raw_pnl = float(p.get("unrealizedPnl") or 0)
-                unrealized_pnl = raw_pnl if side == "long" else -abs(raw_pnl)
+                unrealized_pnl = raw_pnl
 
             pct = p.get("percentage")
             unrealized_pnl_r = float(pct) / 100 if pct is not None else 0.0
