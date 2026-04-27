@@ -1595,6 +1595,7 @@ class AnalysisManager:
 
             # ── Bitget 자동매매 실행 ──────────────────────────
             await _run_auto_trade(analysis, price, tf_data)
+            await _save_account_snapshot()
 
             # ── 텔레그램 분석 알림 (확신도 65% 이상)
             await asyncio.to_thread(
@@ -1793,6 +1794,30 @@ async def _reflection_loop():
         await asyncio.sleep(INTERVAL)
 
 
+
+async def _save_account_snapshot():
+    """계좌 스냅샷을 account_history.jsonl에 저장."""
+    try:
+        if _auto_trader is None:
+            return
+        acct = await asyncio.to_thread(_auto_trader.get_account)
+        equity = float(acct.get("equity", 0) or 0)
+        if equity <= 0:
+            return
+        import time as _time
+        snapshot = {
+            "observed_ts":    _time.time(),
+            "account_equity": equity,
+            "available":      float(acct.get("available", 0) or 0),
+            "today_total_pnl": float(acct.get("todayProfitLoss", 0) or 0),
+            "today_pnl_pct":  0,
+        }
+        history_path = os.path.join(BASE_DIR, "data", "account_history.jsonl")
+        os.makedirs(os.path.dirname(history_path), exist_ok=True)
+        with open(history_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print("[snapshot] 저장 실패:", e)
 
 async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | None):
     """분석 완료 후 Bitget 자동매매 실행 (비동기 wrapping)."""
