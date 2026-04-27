@@ -2242,6 +2242,7 @@ async def account_endpoint():
             acct = await asyncio.to_thread(_auto_trader.get_account)
             print("[ACCT-VAL]", acct, flush=True)
             positions = await asyncio.to_thread(_auto_trader.get_positions)
+            print("[POS]", positions, flush=True)
 
             equity     = float(acct.get("equity",          0) or 0)
             available  = float(acct.get("available",       0) or 0)
@@ -2512,6 +2513,7 @@ async def auto_trade_status():
     if _auto_trader is not None:
         try:
             positions = await asyncio.to_thread(_auto_trader.get_positions)
+            print("[POS]", positions, flush=True)
         except Exception as e:
             positions = [{"error": str(e)}]
         try:
