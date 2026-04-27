@@ -2248,7 +2248,7 @@ async def account_endpoint():
             available  = float(acct.get("available",       0) or 0)
             unrealized = float(acct.get("unrealizedPL",    0) or 0)
             # 포지션에서 미실현 손익 합산
-            pos_unrealized = sum(float(p.get("unrealizedPnl", 0) or 0) for p in positions)
+            pos_unrealized = sum(float(p.get("unrealizedPL", 0) or 0) for p in positions)
             if pos_unrealized != 0: unrealized = pos_unrealized
             today_pnl  = float(acct.get("todayProfitLoss", 0) or 0)
             # ccxt 폴백: info 필드
