@@ -136,6 +136,7 @@ class BitgetClient:
             "ACCESS-PASSPHRASE": passphrase,
             "Content-Type": "application/json",
         }
+        print(f"[REST] {path} {body_str}", flush=True)
         r = _req.post("https://api.bitget.com" + path, headers=headers, data=body_str, timeout=10)
         d = r.json()
         if d.get("code") not in ("00000", "0"):
