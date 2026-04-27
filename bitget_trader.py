@@ -119,7 +119,7 @@ class BitgetClient:
                 "tdMode":     "cross",
                 "posSide":    hold_side,
                 "reduceOnly": True,
-                "orderType":  "profit_market",
+                "orderType":  "market",
                 "triggerPrice": str(trigger_price),
                 "planType":   "profit_plan",
             }
@@ -137,7 +137,7 @@ class BitgetClient:
                 "tdMode":       "cross",
                 "posSide":      hold_side,
                 "reduceOnly":   True,
-                "orderType":    "loss_market",
+                "orderType":    "market",
                 "triggerPrice": str(trigger_price),
                 "planType":     "loss_plan",
             }
