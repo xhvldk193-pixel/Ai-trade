@@ -1854,6 +1854,16 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
     confidence = analysis.get("confidence", 0)
     trade_levels = analysis.get("trade_levels")
 
+    # AI 권장 레버리지 파싱
+    import re as _re
+    summary = analysis.get("summary", "") or ""
+    lev_match = _re.search(r"(\d+)배\s*레버리지", summary)
+    if lev_match and _auto_trader:
+        ai_lev = int(lev_match.group(1))
+        if 1 <= ai_lev <= 20:
+            _auto_trader.leverage = ai_lev
+            print(f"[AutoTrade] AI 권장 레버리지 적용: {ai_lev}배")
+
     async with _auto_trade_lock:
         try:
             result = await asyncio.to_thread(
