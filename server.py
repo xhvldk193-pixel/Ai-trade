@@ -2475,9 +2475,6 @@ async def performance_endpoint(days: int = 30):
         "total_trades": total_trades,
         "win_rate": round(total_wins / total_trades * 100, 1) if total_trades > 0 else 0,
     }
-
-    days = max(1, min(days, 365))  # dead code — replaced above
-    if False:
     from datetime import datetime, timezone, timedelta
     # 방어적 경계 — 최대 1년, 최소 1일.
     days = max(1, min(days, 365))
