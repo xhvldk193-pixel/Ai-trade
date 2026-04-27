@@ -147,28 +147,38 @@ class BitgetClient:
     def set_tp(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
         """익절(TP) 주문 등록."""
-        return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
-            "symbol":       f"{symbol}USDT",
-            "productType":  "USDT-FUTURES",
-            "marginCoin":   "USDT",
-            "planType":     "profit_plan",
-            "triggerPrice": str(trigger_price),
-            "triggerType":  "fill_price",
-            "size":         str(size),
-        })
+        try:
+            return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
+                "symbol":       f"{symbol}USDT",
+                "productType":  "USDT-FUTURES",
+                "marginCoin":   "USDT",
+                "planType":     "profit_plan",
+                "triggerPrice": str(trigger_price),
+                "triggerType":  "mark_price",
+                "size":         str(size),
+            })
+        except Exception as e:
+            self._tg_alert(f"⚠️ TP 등록 실패\n{str(e)[:200]}")
+            raise
+
 
     def set_sl(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
         """손절(SL) 주문 등록."""
-        return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
-            "symbol":       f"{symbol}USDT",
-            "productType":  "USDT-FUTURES",
-            "marginCoin":   "USDT",
-            "planType":     "loss_plan",
-            "triggerPrice": str(trigger_price),
-            "triggerType":  "fill_price",
-            "size":         str(size),
-        })
+        try:
+            return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
+                "symbol":       f"{symbol}USDT",
+                "productType":  "USDT-FUTURES",
+                "marginCoin":   "USDT",
+                "planType":     "loss_plan",
+                "triggerPrice": str(trigger_price),
+                "triggerType":  "mark_price",
+                "size":         str(size),
+            })
+        except Exception as e:
+            self._tg_alert(f"⚠️ SL 등록 실패\n{str(e)[:200]}")
+            raise
+
 
     def cancel_all_tpsl(self, symbol: str) -> dict:
         """TP/SL 플랜 주문 전체 취소."""
