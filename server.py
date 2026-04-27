@@ -107,23 +107,7 @@ app = FastAPI()
 # ── 2단계 인증 ────────────────────────────
 import secrets
 _pending_codes = {}  # {code: expire_time}
-_AUTH_SESSIONS_PATH = os.path.join(BASE_DIR, "data", "auth_sessions.json")
 _auth_sessions = set()
-
-def _load_auth_sessions():
-    try:
-        if os.path.exists(_AUTH_SESSIONS_PATH):
-            data = json.load(open(_AUTH_SESSIONS_PATH))
-            _auth_sessions.update(data.get("sessions", []))
-    except: pass
-
-def _save_auth_sessions():
-    try:
-        os.makedirs(os.path.dirname(_AUTH_SESSIONS_PATH), exist_ok=True)
-        json.dump({"sessions": list(_auth_sessions)}, open(_AUTH_SESSIONS_PATH, "w"))
-    except: pass
-
-_load_auth_sessions()
 
 def _gen_code() -> str:
     return str(random.randint(100000, 999999))
@@ -293,6 +277,21 @@ _TF_TO_BYBIT  = {"5m": "5", "15m": "15", "1h": "60", "4h": "240", "1d": "D"}
 _BYBIT_TF_MAP = {v: k for k, v in _TF_TO_BYBIT.items()}
 MACRO_REFRESH_SECS = 60 * 60
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_AUTH_SESSIONS_PATH = os.path.join(BASE_DIR, "data", "auth_sessions.json")
+
+def _load_auth_sessions():
+    try:
+        if os.path.exists(_AUTH_SESSIONS_PATH):
+            data = json.load(open(_AUTH_SESSIONS_PATH))
+            _auth_sessions.update(data.get("sessions", []))
+    except: pass
+
+def _save_auth_sessions():
+    try:
+        os.makedirs(os.path.dirname(_AUTH_SESSIONS_PATH), exist_ok=True)
+        json.dump({"sessions": list(_auth_sessions)}, open(_AUTH_SESSIONS_PATH, "w"))
+    except: pass
+
 LATEST_ANALYSIS_PATH   = os.path.join(BASE_DIR, "data", "latest_analysis.json")
 ANALYSIS_HISTORY_PATH  = os.path.join(BASE_DIR, "data", "analysis_history.jsonl")
 ANALYSIS_HISTORY_MAX   = 500   # JSONL 최대 보관 건수
