@@ -107,7 +107,23 @@ app = FastAPI()
 # ── 2단계 인증 ────────────────────────────
 import secrets
 _pending_codes = {}  # {code: expire_time}
-_auth_sessions = set()  # 인증된 세션 토큰
+_AUTH_SESSIONS_PATH = os.path.join(BASE_DIR, "data", "auth_sessions.json")
+_auth_sessions = set()
+
+def _load_auth_sessions():
+    try:
+        if os.path.exists(_AUTH_SESSIONS_PATH):
+            data = json.load(open(_AUTH_SESSIONS_PATH))
+            _auth_sessions.update(data.get("sessions", []))
+    except: pass
+
+def _save_auth_sessions():
+    try:
+        os.makedirs(os.path.dirname(_AUTH_SESSIONS_PATH), exist_ok=True)
+        json.dump({"sessions": list(_auth_sessions)}, open(_AUTH_SESSIONS_PATH, "w"))
+    except: pass
+
+_load_auth_sessions()
 
 def _gen_code() -> str:
     return str(random.randint(100000, 999999))
@@ -165,6 +181,7 @@ async def auth_verify(request: Request):
         del _pending_codes[code]
         token = secrets.token_hex(32)
         _auth_sessions.add(token)
+        _save_auth_sessions()
         from fastapi.responses import JSONResponse
         resp = JSONResponse({"ok": True})
         resp.set_cookie("session_token", token, httponly=True, max_age=86400*7)
@@ -1608,7 +1625,8 @@ class AnalysisManager:
             raise
         except Exception as exc:
             import traceback as _tb
-            _tb.print_exc()          # 서버 로그에 full stack trace 출력
+            _tb.print_exc()
+            _tg(f"⚠️ 분석 오류\n{type(exc).__name__}: {str(exc)[:200]}")
             await self._fail(job_id, str(exc))
 
 
