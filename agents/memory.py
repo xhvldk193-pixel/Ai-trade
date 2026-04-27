@@ -150,7 +150,7 @@ class FinancialSituationMemory:
         advice: str,
         outcome: str = "",
         meta: Optional[dict] = None,
-        dedup_threshold: float = 0.70,
+        dedup_threshold: float = 0.50,
         dedup_window: int = 2,
     ) -> Optional[MemoryRecord]:
         """
