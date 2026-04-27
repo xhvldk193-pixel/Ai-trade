@@ -61,7 +61,7 @@ class BitgetClient:
                 continue
 
             side = p.get("side", "") or p.get("info", {}).get("holdSide", "")
-            print(f"[SIDE] side={side} contracts={contracts}", flush=True)
+            print(f"[RAW] side={side} unrealizedPnl={p.get('unrealizedPnl')} info_pnl={p.get('info',{}).get('unrealizedPL')}", flush=True)
             entry = float(p.get("entryPrice") or 0)
             mark  = float(p.get("markPrice") or 0)
 
