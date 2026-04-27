@@ -41,7 +41,7 @@ class BitgetClient:
                         now = _dt.datetime.utcnow()
                         start_ts = int(_dt.datetime(now.year, now.month, now.day).timestamp() * 1000)
                         pnl_data = self._ex.fetch_my_trades(
-                            f"{symbol}/USDT:USDT",
+                            f"BTC/USDT:USDT",
                             params={"productType": "USDT-FUTURES", "startTime": str(start_ts)}
                         )
                         today_pnl = sum(float(t.get("info", {}).get("profit", 0) or 0) for t in pnl_data)
