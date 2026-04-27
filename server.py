@@ -1622,7 +1622,7 @@ class AnalysisManager:
 
             # ── 텔레그램 분석 알림 (확신도 65% 이상)
             await asyncio.to_thread(
-                telegram_alert.alert_analysis, analysis, price or 0,
+                telegram_alert.alert_analysis, analysis, price or 0, AUTO_TRADE_MIN_CONF,
                 AUTO_TRADE_MIN_CONF
             )
 
