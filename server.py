@@ -2263,8 +2263,7 @@ async def account_endpoint():
                 total  = float(p.get("total", 0) or 0)
                 entry  = float(p.get("averageOpenPrice", 0) or 0)
                 pnl    = float(p.get("unrealizedPL", 0) or 0)
-                # 숏 포지션은 부호 반전
-                if hold == "short": pnl = -pnl
+
                 # ROE 직접 계산: pnl / (size * entry / leverage)
                 try:
                     margin = (total * entry) / float(lev) if float(str(lev)) > 0 else 0
