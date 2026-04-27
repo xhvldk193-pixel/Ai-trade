@@ -119,41 +119,56 @@ class BitgetClient:
                 log.warning("[Bitget] 청산 실패: %s", e)
         return results
 
+    def _rest_post(self, path: str, body: dict) -> dict:
+        """Bitget REST API 직접 호출 (ccxt 우회)."""
+        import hmac, hashlib, base64, time as _t, json as _json, requests as _req
+        api_key = self._ex.apiKey
+        secret  = self._ex.secret
+        passphrase = self._ex.password
+        ts = str(int(_t.time() * 1000))
+        body_str = _json.dumps(body)
+        pre = ts + "POST" + path + body_str
+        sign = base64.b64encode(hmac.new(secret.encode(), pre.encode(), hashlib.sha256).digest()).decode()
+        headers = {
+            "ACCESS-KEY": api_key,
+            "ACCESS-SIGN": sign,
+            "ACCESS-TIMESTAMP": ts,
+            "ACCESS-PASSPHRASE": passphrase,
+            "Content-Type": "application/json",
+        }
+        r = _req.post("https://api.bitget.com" + path, headers=headers, data=body_str, timeout=10)
+        d = r.json()
+        if d.get("code") not in ("00000", "0"):
+            raise RuntimeError(f"Bitget: {d.get('msg')} ({d.get('code')})")
+        return d
+
     def set_tp(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
         """익절(TP) 주문 등록."""
-        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
-        side = "sell" if hold_side == "long" else "buy"
-        return self._ex.create_order(
-            ccxt_symbol, "limit", side, size,
-            price=trigger_price,
-            params={
-                "tdMode":     "cross",
-                "posSide":    hold_side,
-                "reduceOnly": True,
-                "orderType":  "market",
-                "triggerPrice": str(trigger_price),
-                "planType":   "profit_plan",
-            }
-        )
+        return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
+            "symbol":       f"{symbol}USDT",
+            "productType":  "USDT-FUTURES",
+            "marginCoin":   "USDT",
+            "planType":     "profit_plan",
+            "triggerPrice": str(trigger_price),
+            "triggerType":  "fill_price",
+            "orderType":    "market",
+            "size":         str(size),
+        })
 
     def set_sl(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
         """손절(SL) 주문 등록."""
-        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
-        side = "sell" if hold_side == "long" else "buy"
-        return self._ex.create_order(
-            ccxt_symbol, "limit", side, size,
-            price=trigger_price,
-            params={
-                "tdMode":       "cross",
-                "posSide":      hold_side,
-                "reduceOnly":   True,
-                "orderType":    "market",
-                "triggerPrice": str(trigger_price),
-                "planType":     "loss_plan",
-            }
-        )
+        return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
+            "symbol":       f"{symbol}USDT",
+            "productType":  "USDT-FUTURES",
+            "marginCoin":   "USDT",
+            "planType":     "loss_plan",
+            "triggerPrice": str(trigger_price),
+            "triggerType":  "fill_price",
+            "orderType":    "market",
+            "size":         str(size),
+        })
 
     def cancel_all_tpsl(self, symbol: str) -> dict:
         """TP/SL 플랜 주문 전체 취소."""
