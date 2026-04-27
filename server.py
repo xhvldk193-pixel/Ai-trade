@@ -1872,6 +1872,7 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
             )
         except Exception as exc:
             import logging as _lg
+            import traceback as _tb2; _tb2.print_exc()
             _lg.getLogger("auto-trader").error("자동매매 오류: %s", exc)
             result = {
                 "action": "error", "reason": str(exc),
