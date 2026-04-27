@@ -1900,6 +1900,7 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
 @app.on_event("startup")
 async def on_startup():
     telegram_alert.init(os.environ.get("TELEGRAM_BOT_TOKEN",""), os.environ.get("TELEGRAM_CHAT_ID",""))
+    _tg("🚀 서버 시작됨 - 텔레그램 연결 OK")
     await _market_stream.start()
     await _account_stream.start()
     await _macro_snapshot.start()
