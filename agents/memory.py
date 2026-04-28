@@ -170,7 +170,7 @@ class FinancialSituationMemory:
             recent = self._records[-dedup_window:] if dedup_window > 0 else []
             for r in recent:
                 sim = self._jaccard(new_tokens, _tokenize(r.situation))
-                if sim >= dedup_threshold:
+                if dedup_threshold > 0 and sim >= dedup_threshold:
                     return None
 
             rec = MemoryRecord(
