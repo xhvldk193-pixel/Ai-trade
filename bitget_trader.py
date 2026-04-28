@@ -153,7 +153,7 @@ class BitgetClient:
         }
         if order_type == "limit" and price:
             body["price"] = str(price)
-        return self._rest_post("/api/v2/mix/order/placeOrder", body)
+        return self._rest_post("/api/v2/mix/order/place-order", body)
 
     def close_all(self, symbol: str) -> list[dict]:
         """전체 포지션 시장가 청산."""
@@ -201,7 +201,7 @@ class BitgetClient:
                hold_side: str, size: float) -> dict:
         """익절(TP) 주문 등록."""
         try:
-            return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
+            return self._rest_post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       f"{symbol}USDT",
                 "productType":  "USDT-FUTURES",
                 "marginCoin":   "USDT",
@@ -219,7 +219,7 @@ class BitgetClient:
                hold_side: str, size: float) -> dict:
         """손절(SL) 주문 등록."""
         try:
-            return self._rest_post("/api/v2/mix/order/placeTpslOrder", {
+            return self._rest_post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       f"{symbol}USDT",
                 "productType":  "USDT-FUTURES",
                 "marginCoin":   "USDT",
