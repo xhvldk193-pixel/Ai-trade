@@ -130,7 +130,7 @@ class BitgetClient:
             return {}
 
     def place_order(self, symbol: str, side: str, size: float,
-                    order_type: str = "market") -> dict:
+                    order_type: str = "market", price: float = None) -> dict:
         """
         side: "open_long" | "open_short" | "close_long" | "close_short"
         """
@@ -151,6 +151,8 @@ class BitgetClient:
             "orderType":   order_type,
             "force":       "gtc",
         }
+        if order_type == "limit" and price:
+            body["price"] = str(price)
         return self._rest_post("/api/v2/mix/order/placeOrder", body)
 
     def close_all(self, symbol: str) -> list[dict]:
@@ -355,7 +357,23 @@ class BitgetAutoTrader:
 
         size = self._contracts(price)
         order_side = "open_long" if desired == "long" else "open_short"
-        order_resp = self.client.place_order(self.symbol, order_side, size)
+
+        # 진입가 기반 시장가/지정가 결정
+        entry_price = trade_levels.get("entry") if trade_levels else None
+        use_limit = False
+        if entry_price and price:
+            if desired == "short" and price < entry_price:
+                # 숏: 현재가가 진입가보다 낮으면 지정가
+                use_limit = True
+            elif desired == "long" and price > entry_price:
+                # 롱: 현재가가 진입가보다 높으면 지정가
+                use_limit = True
+
+        if use_limit and entry_price:
+            order_resp = self.client.place_order(self.symbol, order_side, size, order_type="limit", price=entry_price)
+            result["reason"] = f"지정가 진입 @ ${entry_price:,.2f}"
+        else:
+            order_resp = self.client.place_order(self.symbol, order_side, size)
         result["action"] = desired
         result["order"]  = order_resp
         result["reason"] = (
