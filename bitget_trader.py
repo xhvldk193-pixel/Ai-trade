@@ -202,7 +202,7 @@ class BitgetClient:
         """익절(TP) 주문 등록."""
         try:
             return self._rest_post("/api/v2/mix/order/place-tpsl-order", {
-                "symbol":       f"{symbol}USDT",
+                "symbol":       symbol if symbol.endswith("USDT") else f"{symbol}USDT",
                 "productType":  "USDT-FUTURES",
                 "marginCoin":   "USDT",
                 "planType":     "profit_plan",
@@ -220,7 +220,7 @@ class BitgetClient:
         """손절(SL) 주문 등록."""
         try:
             return self._rest_post("/api/v2/mix/order/place-tpsl-order", {
-                "symbol":       f"{symbol}USDT",
+                "symbol":       symbol if symbol.endswith("USDT") else f"{symbol}USDT",
                 "productType":  "USDT-FUTURES",
                 "marginCoin":   "USDT",
                 "planType":     "loss_plan",
