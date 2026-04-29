@@ -294,7 +294,17 @@ class BitgetAutoTrader:
         self._last: dict    = {}
 
     def _contracts(self, price: float) -> float:
-        return round((self.usdt_per_trade * self.leverage) / price, 4)
+        # usdt_per_trade가 1~100 사이면 잔고 비율(%)로 처리
+        if 1 <= self.usdt_per_trade <= 100:
+            try:
+                acct = self.get_account()
+                equity = float(acct.get("equity", 0) or 0)
+                usdt = equity * (self.usdt_per_trade / 100)
+            except:
+                usdt = 100  # 폴백
+        else:
+            usdt = self.usdt_per_trade
+        return round((usdt * self.leverage) / price, 4)
 
     def _current_side(self) -> Optional[str]:
         positions = self.client.get_positions(self.symbol)
