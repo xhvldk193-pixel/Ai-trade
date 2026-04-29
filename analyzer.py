@@ -210,6 +210,20 @@ def _build_context_blob(
     except Exception as exc:
         account_context_str = f"[계좌 / 리스크 제약]\n  데이터 수집 실패 — {exc}"
 
+
+    # 비트겟 포지션 추가
+    try:
+        from bitget_trader import BitgetAutoTrader as _BAT
+        import os as _os
+        _bt = _BAT(_os.environ.get("BITGET_API_KEY",""), _os.environ.get("BITGET_SECRET_KEY",""), _os.environ.get("BITGET_PASSPHRASE",""))
+        _positions = _bt.get_positions()
+        if _positions:
+            pos_lines = ["\n[비트겟 현재 포지션]"]
+            for p in _positions:
+                pos_lines.append(f"  {p.get('holdSide','').upper()} {p.get('total',0)}계약 진입가 ${p.get('averageOpenPrice',0):,.2f} 미실현 ${p.get('unrealizedPL',0):+,.2f} 레버리지 {p.get('leverage',0)}x")
+            account_context_str += "\n".join(pos_lines)
+    except:
+        pass
     # 각 타임프레임 상세 지표
     tf_order = ["1d", "4h", "1h", "15m", "5m"]
     ordered  = {tf: multi_tf_data[tf] for tf in tf_order if tf in multi_tf_data}
