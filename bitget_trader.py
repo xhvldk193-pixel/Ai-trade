@@ -130,7 +130,8 @@ class BitgetClient:
             return {}
 
     def place_order(self, symbol: str, side: str, size: float,
-                    order_type: str = "market", price: float = None) -> dict:
+                    order_type: str = "market", price: float = None,
+                    tp: float = None, sl: float = None) -> dict:
         """
         side: "open_long" | "open_short" | "close_long" | "close_short"
         """
@@ -153,6 +154,10 @@ class BitgetClient:
         }
         if order_type == "limit" and price:
             body["price"] = str(price)
+        if tp:
+            body["presetStopSurplusPrice"] = str(tp)
+        if sl:
+            body["presetStopLossPrice"] = str(sl)
         return self._rest_post("/api/v2/mix/order/place-order", body)
 
     def close_all(self, symbol: str) -> list[dict]:
@@ -378,10 +383,10 @@ class BitgetAutoTrader:
                 use_limit = True
 
         if use_limit and entry_price:
-            order_resp = self.client.place_order(self.symbol, order_side, size, order_type="limit", price=entry_price)
+            order_resp = self.client.place_order(self.symbol, order_side, size, order_type="limit", price=entry_price, tp=tp, sl=sl)
             result["reason"] = f"지정가 진입 @ ${entry_price:,.2f}"
         else:
-            order_resp = self.client.place_order(self.symbol, order_side, size)
+            order_resp = self.client.place_order(self.symbol, order_side, size, tp=tp, sl=sl)
         result["action"] = desired
         result["order"]  = order_resp
         result["reason"] = (
@@ -391,19 +396,9 @@ class BitgetAutoTrader:
         )
         log.info("[AutoTrader] %s", result["reason"])
 
-        if self.use_tp and tp:
-            try:
-                result["tp_order"] = self.client.set_tp(self.symbol, tp, desired, size)
-            except Exception as e:
-                log.warning("[AutoTrader] TP 등록 실패: %s", e)
-                result["tp_order"] = {"error": str(e)}
-
-        if self.use_sl and sl:
-            try:
-                result["sl_order"] = self.client.set_sl(self.symbol, sl, desired, size)
-            except Exception as e:
-                log.warning("[AutoTrader] SL 등록 실패: %s", e)
-                result["sl_order"] = {"error": str(e)}
+        # TP/SL은 진입 주문 시 presetStopSurplusPrice/presetStopLossPrice로 같이 등록됨
+        result["tp_order"] = {"included_in_order": True} if tp else None
+        result["sl_order"] = {"included_in_order": True} if sl else None
 
         self._last = result
         return result
