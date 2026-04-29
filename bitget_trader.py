@@ -299,7 +299,7 @@ class BitgetAutoTrader:
             try:
                 acct = self.get_account()
                 equity = float(acct.get("equity", 0) or 0)
-                usdt = equity * (self.usdt_per_trade / 100)
+                usdt = equity * (self.usdt_per_trade / 100) * 0.95  # 5% 수수료 여유
             except:
                 usdt = 100  # 폴백
         else:
