@@ -1616,6 +1616,13 @@ class AnalysisManager:
             await asyncio.to_thread(_persist_latest_analysis, payload)
             await asyncio.to_thread(_persist_analysis_history, payload)
 
+            # ── 미체결 주문 취소 (이전 지정가 주문 정리) ──────
+            if _auto_trader:
+                try:
+                    await asyncio.to_thread(_auto_trader.client.cancel_all_tpsl, _auto_trader.symbol)
+                except:
+                    pass
+
             # ── Bitget 자동매매 실행 ──────────────────────────
             await _run_auto_trade(analysis, price, tf_data)
             await _save_account_snapshot()
