@@ -208,7 +208,6 @@ class BitgetClient:
                 "planType":     "profit_plan",
                 "triggerPrice": str(trigger_price),
                 "triggerType":  "mark_price",
-                "holdSide":     hold_side,
                 "size":         str(size),
             })
         except Exception as e:
@@ -226,7 +225,6 @@ class BitgetClient:
                 "planType":     "loss_plan",
                 "triggerPrice": str(trigger_price),
                 "triggerType":  "mark_price",
-                "holdSide":     hold_side,
                 "size":         str(size),
             })
         except Exception as e:
