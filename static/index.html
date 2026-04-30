@@ -2550,7 +2550,7 @@ a.status-chip { cursor: pointer; }
               과거 판단 리플렉션 실행
             </button>
             <span id="reflect-status" class="agents-reflect-status"></span>
-            <button onclick="fetch('/api/memory/reset',{method:'POST'}).then(r=>r.json()).then(d=>{document.getElementById('reflect-status').textContent=d.msg;})" style="margin-top:8px;padding:6px 12px;border-radius:6px;border:1px solid #dc2626;background:#dc262622;color:#dc2626;cursor:pointer;font-size:12px;">🗑️ 메모리 초기화</button>
+            <button onclick="if(confirm('메모리를 초기화하시겠습니까?')){fetch('/api/memory/reset',{method:'POST'}).then(r=>r.json()).then(d=>{document.getElementById('reflect-status').textContent=d.ok?'초기화 완료':'실패';});}" style="margin-top:8px;padding:6px 12px;border-radius:6px;border:1px solid #dc2626;background:#dc262622;color:#dc2626;cursor:pointer;font-size:12px;">🗑️ 메모리 초기화</button>
           </div>
         </div>
       </div>
