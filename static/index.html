@@ -2296,10 +2296,7 @@ a.status-chip { cursor: pointer; }
           <h1 id="header-base" class="header-title">BTC</h1>
           <span id="header-quote" class="header-pair">/ USDT</span>
         </div>
-        <div style="display:flex;gap:6px;">
-          <button id="hdr-btn-btc" onclick="fetch('/api/symbol',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"symbol":"BTCUSDT"}'})" style="padding:4px 10px;border-radius:6px;border:2px solid #f7931a;background:#f7931a22;color:#f7931a;font-weight:700;cursor:pointer;font-size:13px;z-index:999;position:relative;">BTC</button>
-          <button id="hdr-btn-eth" onclick="fetch('/api/symbol',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"symbol":"ETHUSDT"}'})" style="padding:4px 10px;border-radius:6px;border:2px solid #627eea;background:#627eea22;color:#627eea;font-weight:700;cursor:pointer;font-size:13px;z-index:999;position:relative;">ETH</button>
-        </div>
+        
       </div>
       <div id="header-price" class="header-price"></div>
     </div>
@@ -6690,13 +6687,7 @@ function showError(msg) {
   <div class="at-section">
     <div class="at-section-title">자동매매 설정</div>
 
-    <div class="at-row" style="margin-bottom:12px;">
-      <span class="at-label">거래 코인</span>
-      <div style="display:flex;gap:8px;">
-        <button id="btn-btc" onclick="setSymbol('BTCUSDT')" style="flex:1;padding:8px;border-radius:8px;border:2px solid #f7931a;background:#f7931a22;color:#f7931a;font-weight:700;cursor:pointer;">BTC</button>
-        <button id="btn-eth" onclick="setSymbol('ETHUSDT')" style="flex:1;padding:8px;border-radius:8px;border:2px solid #627eea;background:#627eea22;color:#627eea;font-weight:700;cursor:pointer;">ETH</button>
-      </div>
-    </div>
+    
     <div class="at-row">
       <span class="at-label">자동매매</span>
       <div class="at-toggle" onclick="atToggleEnabled()">
