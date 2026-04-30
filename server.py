@@ -1771,6 +1771,25 @@ _last_trade_result = {}
 _trade_log = []
 _TRADE_LOG_MAX = 100
 _AT_SETTINGS_PATH = os.path.join(BASE_DIR, "data", "auto_trade_settings.json")
+_SYMBOL_PATH = os.path.join(BASE_DIR, "data", "symbol.json")
+_current_symbol = DEFAULT_SYMBOL
+
+def _load_symbol():
+    global _current_symbol
+    try:
+        if os.path.exists(_SYMBOL_PATH):
+            _current_symbol = json.load(open(_SYMBOL_PATH)).get("symbol", DEFAULT_SYMBOL)
+    except: pass
+
+def _save_symbol(symbol: str):
+    global _current_symbol
+    _current_symbol = symbol
+    try:
+        os.makedirs(os.path.dirname(_SYMBOL_PATH), exist_ok=True)
+        json.dump({"symbol": symbol}, open(_SYMBOL_PATH, "w"))
+    except: pass
+
+_load_symbol()
 _cached_account = {}
 
 def _load_at_settings():
@@ -2326,6 +2345,21 @@ async def account_endpoint():
     return {"wallet_balance": 0, "available_balance": 0,
             "open_positions": [], "updated_at": _now_iso()}
 
+
+@app.post("/api/symbol")
+async def set_symbol(request: Request):
+    body = await request.json()
+    symbol = body.get("symbol", "BTCUSDT").upper()
+    if symbol not in ("BTCUSDT", "ETHUSDT"):
+        raise HTTPException(status_code=400, detail="지원하지 않는 심볼")
+    _save_symbol(symbol)
+    if _auto_trader:
+        _auto_trader.symbol = symbol
+    return {"ok": True, "symbol": symbol}
+
+@app.get("/api/symbol")
+async def get_symbol():
+    return {"symbol": _current_symbol}
 
 @app.get("/api/setup/status")
 async def setup_status():

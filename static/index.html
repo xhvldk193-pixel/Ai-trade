@@ -6687,6 +6687,13 @@ function showError(msg) {
   <div class="at-section">
     <div class="at-section-title">자동매매 설정</div>
 
+    <div class="at-row" style="margin-bottom:12px;">
+      <span class="at-label">거래 코인</span>
+      <div style="display:flex;gap:8px;">
+        <button id="btn-btc" onclick="setSymbol('BTCUSDT')" style="flex:1;padding:8px;border-radius:8px;border:2px solid #f7931a;background:#f7931a22;color:#f7931a;font-weight:700;cursor:pointer;">BTC</button>
+        <button id="btn-eth" onclick="setSymbol('ETHUSDT')" style="flex:1;padding:8px;border-radius:8px;border:2px solid #627eea;background:#627eea22;color:#627eea;font-weight:700;cursor:pointer;">ETH</button>
+      </div>
+    </div>
     <div class="at-row">
       <span class="at-label">자동매매</span>
       <div class="at-toggle" onclick="atToggleEnabled()">
@@ -6977,7 +6984,21 @@ function showError(msg) {
 
   // ── 유틸 ─────────────────────────────────
   function _fmt(v) { return v ? Number(v).toLocaleString('en-US',{maximumFractionDigits:2}) : '–'; }
-  function _setVal(id, v) { const el=document.getElementById(id); if(el && document.activeElement !== el) el.value=v; }
+  async function setSymbol(symbol) {
+    await fetch('/api/symbol', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({symbol})});
+    document.getElementById('btn-btc').style.opacity = symbol === 'BTCUSDT' ? '1' : '0.4';
+    document.getElementById('btn-eth').style.opacity = symbol === 'ETHUSDT' ? '1' : '0.4';
+}
+
+async function loadSymbol() {
+    const r = await fetch('/api/symbol');
+    const d = await r.json();
+    setSymbol(d.symbol);
+}
+
+loadSymbol();
+
+function _setVal(id, v) { const el=document.getElementById(id); if(el && document.activeElement !== el) el.value=v; }
   function setFeedback(msg, color) {
     const el = document.getElementById('at-feedback');
     if (el) { el.textContent = msg; el.style.color = color||'#9098c0'; }
