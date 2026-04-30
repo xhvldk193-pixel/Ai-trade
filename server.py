@@ -1633,6 +1633,28 @@ class AnalysisManager:
                 AUTO_TRADE_MIN_CONF
             )
 
+            # ── 포지션 있을 때 관리 알림
+            if _auto_trader:
+                try:
+                    positions = await asyncio.to_thread(_auto_trader.get_positions)
+                    if positions:
+                        trade_levels = analysis.get("trade_levels") or {}
+                        new_sl = trade_levels.get("stop")
+                        new_tp = trade_levels.get("target")
+                        for p in positions:
+                            side = p.get("holdSide", "")
+                            entry = p.get("averageOpenPrice", 0)
+                            upnl = p.get("unrealizedPL", 0)
+                            emoji = "🟢" if upnl >= 0 else "🔴"
+                            msg = f"📊 포지션 관리 알림\n{side.upper()} 진입가 ${entry:,.2f}\n미실현: {emoji}${upnl:+,.2f}\n"
+                            if new_sl:
+                                msg += f"AI 권고 손절: ${new_sl:,.2f}\n"
+                            if new_tp:
+                                msg += f"AI 권고 익절: ${new_tp:,.2f}"
+                            _tg(msg)
+                except:
+                    pass
+
         except asyncio.CancelledError:
             await self._fail(job_id, "분석 작업이 취소되었습니다.", status="cancelled")
             raise
