@@ -1575,9 +1575,9 @@ class AnalysisManager:
             if _market_stream.is_ready():
                 tf_data, price = await _market_stream.get_analysis_inputs()
             else:
-                tf_data = await loop.run_in_executor(_executor, _fetch_all, DEFAULT_SYMBOL)
+                tf_data = await loop.run_in_executor(_executor, _fetch_all, _current_symbol)
                 try:
-                    price = await loop.run_in_executor(_executor, fetch_current_price, DEFAULT_SYMBOL)
+                    price = await loop.run_in_executor(_executor, fetch_current_price, _current_symbol)
                 except Exception:
                     price = None
 
