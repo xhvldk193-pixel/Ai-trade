@@ -6990,8 +6990,8 @@ function showError(msg) {
 
   // ── 유틸 ─────────────────────────────────
   function _fmt(v) { return v ? Number(v).toLocaleString('en-US',{maximumFractionDigits:2}) : '–'; }
-  async function setSymbol(symbol) {
-    await fetch('/api/symbol', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({symbol})});
+  function setSymbol(symbol) {
+    fetch('/api/symbol', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({symbol})});
     // 헤더 버튼
     const hBtc = document.getElementById('hdr-btn-btc');
     const hEth = document.getElementById('hdr-btn-eth');
