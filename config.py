@@ -76,7 +76,7 @@ def symbol_to_pair(symbol: str) -> str:
 DEFAULT_LEVERAGE     = AUTO_TRADE_LEVERAGE
 OWNER_PASSWORD       = _safe_env("OWNER_PASSWORD", _OWNER_PASSWORD_DEFAULT)
 
-TIMEFRAMES     = ["1h", "4h", "1d"]
+TIMEFRAMES     = ["5m", "15m", "1h", "4h", "1d"]
 CANDLE_LIMIT   = 200
 AUTO_REFRESH_INTERVAL = 1800
 
