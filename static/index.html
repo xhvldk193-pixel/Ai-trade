@@ -7006,8 +7006,8 @@ function showError(msg) {
     const base = symbol.replace('USDT','');
     const hBase = document.getElementById('header-base');
     if(hBase) hBase.textContent = base;
-    // 페이지 리로드로 차트 갱신
-    location.reload();
+    // 심볼 변경 알림
+    console.log("심볼 변경:", symbol);
 }
 
 async function loadSymbol() {
