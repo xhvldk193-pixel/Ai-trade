@@ -130,7 +130,7 @@ def _send_auth_code(code: str):
 async def auth_middleware(request, call_next):
     path = request.url.path
     # 정적 파일, 인증 엔드포인트는 통과
-    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol"):
+    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol", "/api/memory/reset"):
         return await call_next(request)
     
     # 세션 토큰 확인
