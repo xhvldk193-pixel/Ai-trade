@@ -7008,9 +7008,13 @@ function showError(msg) {
 }
 
 async function loadSymbol() {
-    const r = await fetch('/api/symbol');
-    const d = await r.json();
-    setSymbol(d.symbol);
+    try {
+        const r = await fetch('/api/symbol');
+        const d = await r.json();
+        setSymbol(d.symbol);
+    } catch(e) {
+        console.log("symbol load error:", e);
+    }
 }
 
 loadSymbol();
