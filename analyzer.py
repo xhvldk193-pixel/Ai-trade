@@ -224,7 +224,27 @@ def _build_context_blob(
             account_context_str += "\n".join(pos_lines)
     except:
         pass
-    # 각 타임프레임 상세 지표
+    
+    # 비트겟 설정 및 포지션 컨텍스트 추가
+    try:
+        from bitget_trader import BitgetAutoTrader as _BAT
+        import os as _os
+        _bt = _BAT(_os.environ.get("BITGET_API_KEY",""), _os.environ.get("BITGET_SECRET_KEY",""), _os.environ.get("BITGET_PASSPHRASE",""))
+        _positions = _bt.get_positions()
+        _acct = _bt.get_account()
+        _equity = float(_acct.get("equity", 0) or 0)
+        _lev = int(_os.environ.get("AUTO_TRADE_LEVERAGE", 5))
+        bitget_ctx = f"\n[비트겟 자동매매 설정]\n  레버리지: {_lev}배\n  잔고: ${_equity:,.2f}\n  노출: ${_equity * _lev:,.2f}"
+        if _positions:
+            for p in _positions:
+                bitget_ctx += f"\n  포지션: {p.get('holdSide','').upper()} {p.get('total',0)}계약 진입가 ${p.get('averageOpenPrice',0):,.2f} 미실현 ${p.get('unrealizedPL',0):+,.2f}"
+        else:
+            bitget_ctx += "\n  현재 포지션: 없음"
+        account_context_str += bitget_ctx
+    except:
+        pass
+
+# 각 타임프레임 상세 지표
     tf_order = ["1d", "4h", "1h", "15m", "5m"]
     ordered  = {tf: multi_tf_data[tf] for tf in tf_order if tf in multi_tf_data}
     parts    = [summarize_indicators(tf, df) for tf, df in ordered.items()]
