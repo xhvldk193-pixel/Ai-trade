@@ -2291,9 +2291,15 @@ a.status-chip { cursor: pointer; }
   <!-- 헤더 -->
   <header class="header" role="banner">
     <div class="header-brand">
-      <div class="header-symbol">
-        <h1 id="header-base" class="header-title">BTC</h1>
-        <span id="header-quote" class="header-pair">/ USDT</span>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="header-symbol">
+          <h1 id="header-base" class="header-title">BTC</h1>
+          <span id="header-quote" class="header-pair">/ USDT</span>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button id="hdr-btn-btc" onclick="setSymbol('BTCUSDT')" style="padding:4px 10px;border-radius:6px;border:2px solid #f7931a;background:#f7931a22;color:#f7931a;font-weight:700;cursor:pointer;font-size:13px;">BTC</button>
+          <button id="hdr-btn-eth" onclick="setSymbol('ETHUSDT')" style="padding:4px 10px;border-radius:6px;border:2px solid #627eea;background:#627eea22;color:#627eea;font-weight:700;cursor:pointer;font-size:13px;opacity:0.4;">ETH</button>
+        </div>
       </div>
       <div id="header-price" class="header-price"></div>
     </div>
@@ -6986,8 +6992,22 @@ function showError(msg) {
   function _fmt(v) { return v ? Number(v).toLocaleString('en-US',{maximumFractionDigits:2}) : '–'; }
   async function setSymbol(symbol) {
     await fetch('/api/symbol', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({symbol})});
-    document.getElementById('btn-btc').style.opacity = symbol === 'BTCUSDT' ? '1' : '0.4';
-    document.getElementById('btn-eth').style.opacity = symbol === 'ETHUSDT' ? '1' : '0.4';
+    // 헤더 버튼
+    const hBtc = document.getElementById('hdr-btn-btc');
+    const hEth = document.getElementById('hdr-btn-eth');
+    if(hBtc) hBtc.style.opacity = symbol === 'BTCUSDT' ? '1' : '0.4';
+    if(hEth) hEth.style.opacity = symbol === 'ETHUSDT' ? '1' : '0.4';
+    // 자동매매 패널 버튼
+    const aBtc = document.getElementById('btn-btc');
+    const aEth = document.getElementById('btn-eth');
+    if(aBtc) aBtc.style.opacity = symbol === 'BTCUSDT' ? '1' : '0.4';
+    if(aEth) aEth.style.opacity = symbol === 'ETHUSDT' ? '1' : '0.4';
+    // 헤더 코인명 업데이트
+    const base = symbol.replace('USDT','');
+    const hBase = document.getElementById('header-base');
+    if(hBase) hBase.textContent = base;
+    // 페이지 리로드로 차트 갱신
+    location.reload();
 }
 
 async function loadSymbol() {
