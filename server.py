@@ -1790,6 +1790,7 @@ _auto_trader = _make_auto_trader()
 _auto_trade_enabled = AUTO_TRADE_ENABLED
 _auto_trade_lock = asyncio.Lock()
 _last_trade_result = {}
+_prev_position_side = None  # 이전 포지션 방향 추적
 _trade_log = []
 _TRADE_LOG_MAX = 100
 _AT_SETTINGS_PATH = os.path.join(BASE_DIR, "data", "auto_trade_settings.json")
