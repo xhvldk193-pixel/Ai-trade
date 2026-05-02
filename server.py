@@ -1630,6 +1630,15 @@ class AnalysisManager:
                 except:
                     pass
 
+            # ── 포지션 있으면 분석 스킵 ──────
+            if _auto_trader:
+                try:
+                    _cur_pos = await asyncio.to_thread(_auto_trader.get_positions)
+                    if _cur_pos:
+                        return
+                except:
+                    pass
+
             # ── 미체결 주문 취소 (이전 지정가 주문 정리) ──────
             if _auto_trader:
                 try:
