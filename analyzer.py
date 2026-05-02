@@ -314,9 +314,7 @@ def _build_context_blob(
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"{indicators_summary}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"[피보나치 레벨]\n"
-        f"1h 기준: {fib_1h}\n"
-        f"4h 기준: {fib_4h}"
+        f""
     )
     if return_raw:
         return context_blob, {
