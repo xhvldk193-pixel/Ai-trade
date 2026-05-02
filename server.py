@@ -1967,6 +1967,28 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
         # 텔레그램 매매 알림
         telegram_alert.alert_trade(result)
 
+        # 진입 시 시장 스냅샷 저장 (학습용)
+        if result.get("action") in ("long", "short"):
+            try:
+                snap = {
+                    "timestamp": _now_iso(),
+                    "action": result.get("action"),
+                    "price": price,
+                    "tp": result.get("tp"),
+                    "sl": result.get("sl"),
+                    "confidence": confidence,
+                    "signal": signal,
+                    "summary": analysis.get("summary", ""),
+                    "trade_levels": trade_levels,
+                    "regime": analysis.get("regime", ""),
+                }
+                snap_path = os.path.join(BASE_DIR, "data", "trade_snapshots.jsonl")
+                os.makedirs(os.path.dirname(snap_path), exist_ok=True)
+                with open(snap_path, "a") as f:
+                    f.write(json.dumps(snap, ensure_ascii=False) + "\n")
+            except:
+                pass
+
         # 인메모리 로그 (최대 _TRADE_LOG_MAX 건)
         _trade_log.append(result)
         if len(_trade_log) > _TRADE_LOG_MAX:
