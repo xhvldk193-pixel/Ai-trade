@@ -121,7 +121,9 @@ def _write_agent_memory(
     meta: dict,
 ) -> None:
     """에이전트 메모리에 안전하게 기록. 실패해도 파이프라인은 계속 진행."""
-    print(f"[MEM] writing role={role} enabled={AGENT_MEMORY_WRITE_ENABLED}", flush=True)
+    # 홀드 신호는 메모리 저장 스킵
+    if meta and meta.get("signal") in ("홀드", "HOLD", "hold"):
+        return
     if not AGENT_MEMORY_WRITE_ENABLED:
         return
     try:
