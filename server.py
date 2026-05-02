@@ -1616,6 +1616,20 @@ class AnalysisManager:
             await asyncio.to_thread(_persist_latest_analysis, payload)
             await asyncio.to_thread(_persist_analysis_history, payload)
 
+            # ── 포지션 청산 감지 → 리플렉션 실행 ──────
+            global _prev_position_side
+            if _auto_trader:
+                try:
+                    _cur_positions = await asyncio.to_thread(_auto_trader.get_positions)
+                    _cur_side = _cur_positions[0].get("holdSide") if _cur_positions else None
+                    if _prev_position_side and not _cur_side:
+                        _lg.getLogger("auto-trader").info("[리플렉션] 포지션 청산 감지")
+                        _tg("🔄 포지션 청산 감지 → 리플렉션 실행 중...")
+                        asyncio.create_task(_run_reflection())
+                    _prev_position_side = _cur_side
+                except:
+                    pass
+
             # ── 미체결 주문 취소 (이전 지정가 주문 정리) ──────
             if _auto_trader:
                 try:
