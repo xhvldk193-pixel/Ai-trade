@@ -1624,6 +1624,25 @@ class AnalysisManager:
                     _cur_side = _cur_positions[0].get("holdSide") if _cur_positions else None
                     if _prev_position_side and not _cur_side:
                         _lg.getLogger("auto-trader").info("[리플렉션] 포지션 청산 감지")
+                        # 청산 결과 스냅샷 업데이트
+                        try:
+                            snap_path = os.path.join(BASE_DIR, "data", "trade_snapshots.jsonl")
+                            acct = await asyncio.to_thread(_auto_trader.get_account)
+                            equity = float(acct.get("equity", 0) or 0)
+                            lines = open(snap_path).readlines() if os.path.exists(snap_path) else []
+                            if lines:
+                                last = json.loads(lines[-1])
+                                if not last.get("closed"):
+                                    last["closed"] = True
+                                    last["close_time"] = _now_iso()
+                                    last["close_equity"] = equity
+                                    entry_price = float(last.get("price", 0) or 0)
+                                    close_price = float(acct.get("markPrice", 0) or 0)
+                                    last["result_pct"] = round((equity - float(last.get("equity_at_entry", equity))) / max(equity, 1) * 100, 2)
+                                    lines[-1] = json.dumps(last, ensure_ascii=False) + "\n"
+                                    open(snap_path, "w").writelines(lines)
+                        except:
+                            pass
                         _tg("🔄 포지션 청산 감지 → 리플렉션 실행 중...")
                         asyncio.create_task(_run_reflection())
                     _prev_position_side = _cur_side
