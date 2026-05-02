@@ -1846,6 +1846,15 @@ _load_at_settings()
 # ══════════════════════════════════════════════
 # Routes
 # ══════════════════════════════════════════════
+async def _run_reflection():
+    """포지션 청산 시 리플렉션 실행."""
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            await client.post("http://localhost:8000/api/reflect", timeout=120)
+    except Exception as e:
+        _lg.getLogger("reflection").warning("리플렉션 실패: %s", e)
+
 async def _reflection_loop():
     """6시간마다 자동으로 /api/reflect 를 내부 호출해 리플렉션을 수행한다."""
     import logging as _rlog
