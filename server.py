@@ -2219,6 +2219,19 @@ async def reflect_endpoint():
     except Exception as exc:
         return {"ok": False, "error": f"가격 수집 실패 — {exc}"}
 
+    # 최근 청산 스냅샷에서 실제 청산가 가져오기
+    try:
+        snap_path = os.path.join(BASE_DIR, "data", "trade_snapshots.jsonl")
+        if os.path.exists(snap_path):
+            lines = open(snap_path).readlines()
+            for line in reversed(lines):
+                snap = json.loads(line)
+                if snap.get("closed") and snap.get("close_equity"):
+                    # 실제 청산된 스냅샷이 있으면 현재가 대신 사용
+                    break
+    except:
+        pass
+
     now_utc = _dt.datetime.now(_dt.timezone.utc)
     all_results = []
     total_skipped = 0
