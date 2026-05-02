@@ -227,6 +227,20 @@ def _build_context_blob(
     except:
         pass
 
+    # ATR 직접 계산 (1h 기준)
+    try:
+        if "1h" in multi_tf_data:
+            df_1h = multi_tf_data["1h"]
+            if len(df_1h) >= 15:
+                highs = df_1h["high"].values[-15:]
+                lows = df_1h["low"].values[-15:]
+                closes = df_1h["close"].values[-15:]
+                trs = [max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(1,15)]
+                atr_val = sum(trs[-14:]) / 14
+                account_context_str += f"\n[ATR]\n  1h ATR: ${atr_val:,.2f} | SL권고: ${atr_val*0.5:,.2f} | TP권고: ${atr_val*1.0:,.2f}"
+    except:
+        pass
+
 # 각 타임프레임 상세 지표
     tf_order = ["1d", "4h", "1h", "15m", "5m"]
     ordered  = {tf: multi_tf_data[tf] for tf in tf_order if tf in multi_tf_data}
