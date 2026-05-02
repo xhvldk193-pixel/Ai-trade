@@ -1953,7 +1953,7 @@ async def on_startup():
     await _account_stream.start()
     await _macro_snapshot.start()
     await _schedule_manager.start()
-    asyncio.create_task(_reflection_loop(), name="reflection-loop")
+    # asyncio.create_task(_reflection_loop(), name="reflection-loop")  # 매매 체결 시에만 실행
 
 
 @app.on_event("shutdown")
