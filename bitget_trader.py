@@ -284,6 +284,10 @@ def _validate_tpsl(direction, price, tp, sl):
 # AI 신호 → 자동매매 실행기
 # ──────────────────────────────────────────
 class BitgetAutoTrader:
+    # 최소 손익비 — 이 값 미만이면 진입 거부
+    # R:R 1.5 = 이길 때 버는 돈이 질 때 잃는 돈의 1.5배 이상
+    MIN_RR: float = float(os.environ.get("AUTO_TRADE_MIN_RR", "1.5"))
+
     def __init__(self, api_key, secret_key, passphrase,
                  symbol="BTCUSDT", usdt_per_trade=20.0, leverage=3,
                  min_confidence=65, use_tp=True, use_sl=True):
@@ -365,8 +369,31 @@ class BitgetAutoTrader:
         tp, sl = self._extract_tpsl(desired, price, trade_levels)
         result["tp"] = tp
         result["sl"] = sl
-        if tp and sl:
-            result["rr"] = round(abs(tp - price) / abs(sl - price), 2)
+
+        # ── SL 필수 체크 ──────────────────────────────
+        # SL 없이 진입하면 레버리지 × 전체배분 규모가 무한손실 가능
+        if sl is None:
+            result["reason"] = "SL 미설정 → 진입 거부 (손실 무한 리스크)"
+            self._last = result
+            log.warning("[AutoTrader] SL 없음 → 진입 취소")
+            return result
+
+        # ── 최소 손익비(R:R) 체크 ────────────────────
+        if tp is not None:
+            rr = abs(tp - price) / abs(sl - price)
+            result["rr"] = round(rr, 2)
+            if rr < self.MIN_RR:
+                result["reason"] = (
+                    f"R:R {rr:.2f} < 최소 {self.MIN_RR} → 진입 거부"
+                    f" (TP ${tp:,.2f} / SL ${sl:,.2f})"
+                )
+                self._last = result
+                log.warning("[AutoTrader] R:R 불충분(%.2f) → 진입 취소", rr)
+                return result
+        else:
+            # TP 없으면 R:R 계산 불가 → 진입 허용하되 경고 로그
+            result["rr"] = None
+            log.warning("[AutoTrader] TP 없음 — R:R 미검증 진입 (SL만 설정)")
 
         size = self._contracts(price)
         order_side = "open_long" if desired == "long" else "open_short"

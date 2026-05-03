@@ -1954,15 +1954,14 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
     confidence = analysis.get("confidence", 0)
     trade_levels = analysis.get("trade_levels")
 
-    # AI 권장 레버리지 파싱
+    # AI 권장 레버리지는 로그만 기록 — UI 설정을 덮어쓰지 않음
     import re as _re
     summary = analysis.get("summary", "") or ""
-    lev_match = _re.search(r"(\d+)배\s*레버리지", summary)
+    lev_match = _re.search(r"레버리지[:\s]*(\d+)배|(\d+)배[:\s]*레버리지", summary)
     if lev_match and _auto_trader:
-        ai_lev = int(lev_match.group(1))
+        ai_lev = int(lev_match.group(1) or lev_match.group(2))
         if 1 <= ai_lev <= 20:
-            _auto_trader.leverage = ai_lev
-            print(f"[AutoTrade] AI 권장 레버리지 적용: {ai_lev}배")
+            print(f"[AutoTrade] AI 권장 레버리지: {ai_lev}배 (현재 UI 설정: {_auto_trader.leverage}배 — 유지)")
 
     async with _auto_trade_lock:
         try:
