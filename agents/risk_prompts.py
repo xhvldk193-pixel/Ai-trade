@@ -60,10 +60,12 @@ NEUTRAL_SYSTEM = """당신은 BTC 선물 시장의 'Neutral Risk Analyst'입니�
 # 세 에이전트 모두 같은 입력(데이터 + Bull/Bear 토론)을 본다.
 # 다른 두 에이전트의 직전 발언이 있으면 반박 대상으로 받는다.
 
-RISK_USER_TEMPLATE = """{pair_label} 현재 데이터 + 사전 Bull/Bear 토론입니다.
+RISK_USER_TEMPLATE = """{pair_label} 리스크 토론 — 시장 요약 + 사전 Bull/Bear 토론입니다.
 
-{context_blob}
+[시장 핵심 요약]
+{context_summary}
 
+{account_risk_block}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 [Bull 의 주장]
 {bull_final}
@@ -76,6 +78,7 @@ RISK_USER_TEMPLATE = """{pair_label} 현재 데이터 + 사전 Bull/Bear 토론�
 {past_memories_block}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 위 정보를 바탕으로 당신의 리스크 관점을 펼치세요.
+계좌 정보(잔고·배분·레버리지)를 반드시 고려해 사이즈·손익비 판단을 구체화하세요.
 {rebuttal_instruction}"""
 
 

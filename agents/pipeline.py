@@ -171,7 +171,19 @@ def run_pipeline(
     -------
     PipelineResult
     """
-    _query = current_situation or context_blob[:200]
+    # 메모리 쿼리: situation_tags > 핵심 지표 추출 > blob 앞부분 순으로 품질 보장
+    if current_situation:
+        _query = current_situation
+    else:
+        # context_blob에서 BM25에 유효한 범주형 키워드 라인만 추출
+        _kw_lines = []
+        for _l in context_blob.splitlines():
+            _s = _l.strip()
+            if any(kw in _s for kw in ("RSI", "MACD", "펀딩", "추세", "정렬", "스큐", "OI", "포지션")):
+                _kw_lines.append(_s)
+            if len(_kw_lines) >= 8:
+                break
+        _query = " | ".join(_kw_lines) if _kw_lines else context_blob[:300]
 
     # ── 1) Bull/Bear 토론 ─────────────────────────────
     debate = run_bull_bear_debate(

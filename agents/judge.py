@@ -53,9 +53,10 @@ Bear 핵심: [한 줄]
 
 마크다운(**, ##, ---), HTML 금지. 일반 텍스트만."""
 
-JUDGE_USER_TEMPLATE = """{pair_label} 현재 데이터 및 Bull/Bear 토론 결과입니다.
+JUDGE_USER_TEMPLATE = """{pair_label} Bull/Bear 토론 판정 요청입니다.
 
-{context_blob}
+[시장 핵심 요약]
+{context_summary}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 [Bull Researcher 최종 발언]
@@ -66,7 +67,7 @@ JUDGE_USER_TEMPLATE = """{pair_label} 현재 데이터 및 Bull/Bear 토론 결�
 {bear_final}
 {past_memories_block}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-위 데이터와 토론을 바탕으로 공정하게 판정하세요."""
+위 발언의 논리 강도를 공정하게 비교 판정하세요. 전체 시황은 Bull/Bear가 이미 요약했으므로 그들의 주장에 집중하세요."""
 
 
 ProgressCallback = Callable[[str, str], None]
@@ -143,6 +144,28 @@ def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
             raise
 
 
+def _make_context_summary(context_blob: str) -> str:
+    """
+    context_blob 에서 Judge 판정에 필요한 핵심 정보만 추출한다.
+    전체 수천 토큰 대신 ~200자 요약을 Judge 에 주입해 비용·집중도 개선.
+    """
+    lines = context_blob.splitlines()
+    keep = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        # 타임프레임 정렬 요약, 피보나치, 계좌, 펀딩, RSI 라인만 취함
+        if any(kw in s for kw in (
+            "정렬", "RSI", "펀딩", "피보나치", "포지션", "잔고",
+            "스큐", "OI", "거시", "추세", "ATR", "MACD"
+        )):
+            keep.append(s)
+        if len(keep) >= 15:
+            break
+    return "\n".join(keep) if keep else context_blob[:400]
+
+
 def run_judge(
     context_blob: str,
     pair_label: str,
@@ -158,7 +181,7 @@ def run_judge(
     Parameters
     ----------
     context_blob : str
-        공통 시장 데이터 블록.
+        공통 시장 데이터 블록 (내부에서 요약 후 사용).
     pair_label : str
         "BTC/USDC" 등.
     bull_final, bear_final : str
@@ -184,13 +207,16 @@ def run_judge(
 
     # judge 메모리 회상
     past = ""
+    _query = memory_query or context_blob[:200]
     if agent_memories is not None:
-        _query = memory_query or context_blob[:200]
         past = agent_memories.recall("judge", _query, top_k=2)
+
+    # context_blob 전체 대신 핵심 요약만 주입 (토큰 절약 + 집중도 향상)
+    context_summary = _make_context_summary(context_blob)
 
     user_prompt = JUDGE_USER_TEMPLATE.format(
         pair_label=pair_label,
-        context_blob=context_blob,
+        context_summary=context_summary,
         bull_final=bull_final or "(Bull 발언 없음)",
         bear_final=bear_final or "(Bear 발언 없음)",
         past_memories_block=(

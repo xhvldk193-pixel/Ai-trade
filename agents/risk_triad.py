@@ -119,6 +119,44 @@ def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
             raise
 
 
+def _make_context_summary(context_blob: str) -> str:
+    """context_blob에서 핵심 라인만 추출 (Risk 에이전트용 요약)."""
+    lines = context_blob.splitlines()
+    keep = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if any(kw in s for kw in (
+            "정렬", "RSI", "펀딩", "피보나치", "포지션", "잔고",
+            "스큐", "OI", "거시", "추세", "ATR", "MACD", "레버리지", "배분"
+        )):
+            keep.append(s)
+        if len(keep) >= 20:
+            break
+    return "\n".join(keep) if keep else context_blob[:500]
+
+
+def _make_account_risk_block(context_blob: str) -> str:
+    """context_blob에서 계좌·리스크 관련 라인만 추출해 Risk 에이전트에 명시 주입."""
+    lines = context_blob.splitlines()
+    acct_lines = []
+    in_acct = False
+    for line in lines:
+        s = line.strip()
+        if "[비트겟" in s or "[계좌" in s:
+            in_acct = True
+        if in_acct:
+            if s:
+                acct_lines.append(s)
+            # 다음 섹션 구분선이 나오면 종료
+            if s.startswith("━") and acct_lines:
+                break
+    if not acct_lines:
+        return ""
+    return "[계좌 & 리스크 제약 — 반드시 참고]\n" + "\n".join(acct_lines)
+
+
 def run_risk_triad(
     context_blob: str,
     pair_label: str,
@@ -169,6 +207,10 @@ def run_risk_triad(
     _query = memory_query or context_blob[:200]
     last = {"aggressive": "", "conservative": "", "neutral": ""}
 
+    # 루프 전 한 번만 계산 (반복 낭비 방지)
+    _context_summary   = _make_context_summary(context_blob)
+    _account_risk_block = _make_account_risk_block(context_blob)
+
     try:
         for r in range(rounds):
             for side in SPEAKING_ORDER:
@@ -203,7 +245,11 @@ def run_risk_triad(
 
                 user_prompt = RISK_USER_TEMPLATE.format(
                     pair_label=pair_label,
-                    context_blob=context_blob,
+                    context_summary=_context_summary,
+                    account_risk_block=(
+                        f"{_account_risk_block}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        if _account_risk_block else ""
+                    ),
                     bull_final=bull_final or "(직전 Bull 의견 없음)",
                     bear_final=bear_final or "(직전 Bear 의견 없음)",
                     judge_block=(
