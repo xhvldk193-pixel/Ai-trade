@@ -5,6 +5,7 @@ TP/SL: Claude AI 피보나치 기반 목표가/손절가 직접 전달
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Optional
 
