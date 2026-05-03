@@ -198,39 +198,66 @@ def _build_context_blob(
     except Exception as exc:
         account_context_str = f"[계좌 / 리스크 제약]\n  데이터 수집 실패 — {exc}"
 
+    # 비트겟 설정 + 포지션 + 리스크 제약 (단일 호출로 통합)
+    try:
+        from bitget_trader import BitgetAutoTrader as _BAT
+        import os as _os
+        _api_key    = _os.environ.get("BITGET_API_KEY", "")
+        _secret_key = _os.environ.get("BITGET_SECRET_KEY", "")
+        _passphrase = _os.environ.get("BITGET_PASSPHRASE", "")
+        _lev        = int(_os.environ.get("AUTO_TRADE_LEVERAGE", 5))
+        _alloc_pct  = float(_os.environ.get("AUTO_TRADE_USDT", 20))
 
-    # 비트겟 포지션 추가
-    try:
-        from bitget_trader import BitgetAutoTrader as _BAT
-        import os as _os
-        _bt = _BAT(_os.environ.get("BITGET_API_KEY",""), _os.environ.get("BITGET_SECRET_KEY",""), _os.environ.get("BITGET_PASSPHRASE",""))
-        _positions = _bt.get_positions()
-        if _positions:
-            pos_lines = ["\n[비트겟 현재 포지션]"]
-            for p in _positions:
-                pos_lines.append(f"  {p.get('holdSide','').upper()} {p.get('total',0)}계약 진입가 ${p.get('averageOpenPrice',0):,.2f} 미실현 ${p.get('unrealizedPL',0):+,.2f} 레버리지 {p.get('leverage',0)}x")
-            account_context_str += "\n".join(pos_lines)
-    except:
-        pass
-    
-    # 비트겟 설정 및 포지션 컨텍스트 추가
-    try:
-        from bitget_trader import BitgetAutoTrader as _BAT
-        import os as _os
-        _bt = _BAT(_os.environ.get("BITGET_API_KEY",""), _os.environ.get("BITGET_SECRET_KEY",""), _os.environ.get("BITGET_PASSPHRASE",""))
-        _positions = _bt.get_positions()
-        _acct = _bt.get_account()
-        _equity = float(_acct.get("equity", 0) or 0)
-        _lev = int(_os.environ.get("AUTO_TRADE_LEVERAGE", 5))
-        bitget_ctx = f"\n[비트겟 자동매매 설정]\n  레버리지: {_lev}배\n  잔고: ${_equity:,.2f}\n  노출: ${_equity * _lev:,.2f}"
-        if _positions:
-            for p in _positions:
-                bitget_ctx += f"\n  포지션: {p.get('holdSide','').upper()} {p.get('total',0)}계약 진입가 ${p.get('averageOpenPrice',0):,.2f} 미실현 ${p.get('unrealizedPL',0):+,.2f}"
-        else:
-            bitget_ctx += "\n  현재 포지션: 없음"
-        account_context_str += bitget_ctx
-    except:
-        pass
+        if _api_key and _secret_key and _passphrase:
+            _bt        = _BAT(_api_key, _secret_key, _passphrase)
+            _acct      = _bt.get_account()
+            _positions = _bt.get_positions()
+            _equity    = float(_acct.get("equity", 0) or 0)
+            _avail     = float(_acct.get("available", 0) or 0)
+            _today_pnl = float(_acct.get("todayProfitLoss", 0) or 0)
+
+            # 배분 계산 (1~100이면 비율, 그 외면 고정 USDT)
+            if 1 <= _alloc_pct <= 100:
+                _trade_margin = _equity * (_alloc_pct / 100) * 0.95
+                _alloc_label  = f"잔고의 {_alloc_pct:.0f}% = ${_trade_margin:,.2f} 증거금"
+            else:
+                _trade_margin = _alloc_pct
+                _alloc_label  = f"고정 ${_trade_margin:,.2f} 증거금"
+
+            _pos_size = _trade_margin * _lev
+
+            bitget_ctx = (
+                f"\n[비트겟 자동매매 설정]"
+                f"\n  총 잔고: ${_equity:,.2f} USDT  |  가용: ${_avail:,.2f} USDT"
+                f"\n  오늘 실현손익: ${_today_pnl:+,.2f} USDT"
+                f"\n  이번 거래 배분: {_alloc_label}"
+                f"\n  레버리지: {_lev}배  →  예상 포지션 규모: ${_pos_size:,.2f} USDT"
+            )
+
+            if _positions:
+                bitget_ctx += "\n[현재 오픈 포지션]"
+                for p in _positions:
+                    _side     = p.get("holdSide", "").upper()
+                    _qty      = p.get("total", 0)
+                    _entry    = float(p.get("averageOpenPrice", 0) or 0)
+                    _upnl     = float(p.get("unrealizedPL", 0) or 0)
+                    _upnl_r   = float(p.get("unrealizedPLR", 0) or 0)
+                    _p_lev    = p.get("leverage", _lev)
+                    bitget_ctx += (
+                        f"\n  {_side} {_qty}계약  진입가 ${_entry:,.2f}"
+                        f"  미실현 ${_upnl:+,.2f} ({_upnl_r*100:+.2f}%)  레버리지 {_p_lev}x"
+                    )
+                # 포지션 있으면 추가 리스크 경고
+                _total_upnl = sum(float(p.get("unrealizedPL", 0) or 0) for p in _positions)
+                if _equity > 0:
+                    _risk_pct = abs(_total_upnl) / _equity * 100
+                    bitget_ctx += f"\n  ⚠️ 현재 미실현 리스크: 잔고의 {_risk_pct:.1f}%"
+            else:
+                bitget_ctx += "\n  현재 포지션: 없음 (신규 진입 가능)"
+
+            account_context_str += bitget_ctx
+    except Exception as _bg_exc:
+        account_context_str += f"\n[비트겟 데이터]\n  수집 실패 — {_bg_exc}"
 
     # ATR 직접 계산 (1h 기준)
     try:
