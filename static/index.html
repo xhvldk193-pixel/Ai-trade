@@ -2204,8 +2204,8 @@ a.status-chip { cursor: pointer; }
 <div class="page">
 
 
-  <!-- 셋업 모달 -->
-  <div id="setup-overlay" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+  <!-- 셋업 모달 제거됨 -->
+  <div id="setup-overlay" role="dialog" aria-modal="true" aria-labelledby="setup-title" style="display:none!important">
     <div class="setup-card">
       <div class="setup-header">
         <div id="setup-title" class="setup-title">API 키 설정</div>
@@ -5272,67 +5272,7 @@ function toggleGuide(id, btn) {
   btn.classList.toggle("open", isOpen);
 }
 
-async function checkSetup() {
-  try {
-    const res  = await fetch("/api/setup/status");
-    const data = await res.json();
-    // Claude·Binance 키가 없을 때만 모달 표시
-    if (!data.claude || !data.binance) {
-      document.getElementById("setup-overlay").classList.add("visible");
-    }
-  } catch (e) { /* 서버 응답 실패 시 무시 */ }
-}
-
-async function saveSetup() {
-  const btn = document.getElementById("btn-setup-save");
-  btn.disabled = true;
-  btn.textContent = "저장 중…";
-
-  const body = {
-    claude_api_key:     document.getElementById("inp-claude").value.trim(),
-    binance_api_key:    document.getElementById("inp-binance-key").value.trim(),
-    binance_secret_key: document.getElementById("inp-binance-secret").value.trim(),
-  };
-
-  if (!body.claude_api_key) {
-    btn.disabled = false;
-    btn.textContent = "저장하고 시작";
-    showError("Claude API 키는 필수입니다.");
-    return;
-  }
-  if (!body.binance_api_key || !body.binance_secret_key) {
-    btn.disabled = false;
-    btn.textContent = "저장하고 시작";
-    showError("Binance API Key와 Secret Key 모두 입력해주세요.");
-    return;
-  }
-
-  try {
-    const res = await fetch("/api/setup/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      document.getElementById("setup-saved-msg").style.display = "block";
-      setTimeout(() => location.reload(), 1200);
-    } else {
-      throw new Error("저장 실패");
-    }
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = "저장하고 시작";
-    showError("키 저장 중 오류가 발생했습니다: " + e.message);
-  }
-}
-
-function skipSetup() {
-  document.getElementById("setup-overlay").classList.remove("visible");
-}
-
-// 페이지 로드 시 키 확인
-checkSetup();
+// 셋업 모달 비활성화됨
 
 // ══════════════════════════════════════════════
 // 브라우저 알림
