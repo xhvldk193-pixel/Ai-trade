@@ -1984,6 +1984,7 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
 
         # 텔레그램 매매 알림
         telegram_alert.alert_trade(result)
+        telegram_alert.alert_trade_rejected({**result, "signal": signal, "confidence": confidence, "price": price or 0})
 
         # 진입 시 시장 스냅샷 저장 (학습용)
         if result.get("action") in ("long", "short"):
