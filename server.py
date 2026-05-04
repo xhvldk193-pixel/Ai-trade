@@ -2017,6 +2017,44 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
             "[AutoTrade] action=%s reason=%s", result.get("action"), result.get("reason")
         )
 
+        # ── 놓친 진입 메모리 기록 ──────────────────────────
+        # R:R 거부 / SL 미설정 / 확신도 미달 → analyst 메모리에 missed_entry 로 기록
+        # 리플렉션이 나중에 "왜 진입 못 했고 이후 가격이 어떻게 됐는지" 평가
+        _reason = result.get("reason", "")
+        _missed_keywords = ("R:R", "SL 미설정", "확신도", "중복 방지")
+        if any(kw in _reason for kw in _missed_keywords):
+            try:
+                from agents.memory import get_memory as _gm
+                _missed_mem = _gm("analyst")
+                _entry_price = (trade_levels or {}).get("entry") or price
+                _tp = result.get("tp")
+                _sl = result.get("sl")
+                _rr = result.get("rr")
+                _missed_situation = (
+                    f"[놓친 진입 — {_reason}]\n"
+                    f"신호: {signal} | 확신도: {confidence}% | 현재가: ${price:,.2f}\n"
+                    f"진입가: ${_entry_price:,.2f} | "
+                    f"TP: {'$'+f'{_tp:,.2f}' if _tp else 'N/A'} | "
+                    f"SL: {'$'+f'{_sl:,.2f}' if _sl else 'N/A'} | "
+                    f"R:R: {_rr if _rr else 'N/A'}\n"
+                    f"분석요약: {str(analysis.get('summary',''))[:200]}"
+                )
+                _missed_mem.add(
+                    situation=_missed_situation,
+                    advice=f"진입 거부됨 — {_reason}",
+                    meta={
+                        "price_at_analysis": float(price),
+                        "trade_levels": trade_levels,
+                        "missed": True,
+                        "signal": signal,
+                        "confidence": confidence,
+                        "rr": _rr,
+                    }
+                )
+                _lg.getLogger("auto-trader").info("[AutoTrade] 놓친 진입 메모리 기록 완료")
+            except Exception as _me:
+                _lg.getLogger("auto-trader").warning("[AutoTrade] 놓친 진입 메모리 기록 실패 — %s", _me)
+
 
 @app.on_event("startup")
 async def on_startup():
@@ -2237,7 +2275,7 @@ async def reflect_endpoint():
 
     # ── Analyst 메모리 리플렉션 ─────────────────────────
     analyst_memory = _get_memory("analyst")
-    pending = analyst_memory.list_pending_reflections(min_age_seconds=300.0, limit=5)
+    pending = analyst_memory.list_pending_reflections(min_age_seconds=14400.0, limit=5)
 
     for rec in pending:
         try:
@@ -2279,7 +2317,7 @@ async def reflect_endpoint():
             agent_mems = _get_agent_memories()
             for role in _AGENT_ROLES_FOR_REFLECT:
                 role_mem = agent_mems.get(role)
-                role_pending = role_mem.list_pending_reflections(min_age_seconds=300.0, limit=3)
+                role_pending = role_mem.list_pending_reflections(min_age_seconds=14400.0, limit=3)
                 for rec in role_pending:
                     try:
                         ts = _dt.datetime.fromisoformat(rec.timestamp.replace("Z", "+00:00"))
