@@ -61,15 +61,9 @@ from time_utils import format_kst, now_kst
 
 # ── Reflection / Memory (optional: rank_bm25 미설치 시 None) ──
 try:
-    from agents import get_memory as _get_memory
-    from agents import get_agent_memories as _get_agent_memories
-    from agents import reflect_on_record as _reflect_on_record
-    from agents import reflect_for_role as _reflect_for_role
-    _REFLECTION_ENABLED = (
-        _get_memory is not None
-        and _reflect_on_record is not None
-        and _reflect_for_role is not None
-    )
+    from agents.memory import get_memory as _get_memory, get_agent_memories as _get_agent_memories
+    from agents.reflection import reflect_on_record as _reflect_on_record, reflect_for_role as _reflect_for_role
+    _REFLECTION_ENABLED = True
 except Exception as _reflect_exc:  # pragma: no cover
     _get_memory = None             # type: ignore
     _get_agent_memories = None     # type: ignore
@@ -2845,6 +2839,20 @@ async def auto_trade_log(limit: int = 50):
     """인메모리 자동매매 실행 로그 반환 (최신순)."""
     limit = max(1, min(limit, _TRADE_LOG_MAX))
     return {"log": list(reversed(_trade_log[-limit:]))}
+
+
+@app.post("/api/admin/reset-migration")
+async def reset_migration():
+    """마이그레이션 플래그 초기화 — 다음 재시작 시 재실행."""
+    try:
+        _mem_dir = Path(os.environ.get("MEMORY_DIR", os.path.join(BASE_DIR, "data", "memory")))
+        _flag = _mem_dir / ".history_imported"
+        if _flag.exists():
+            _flag.unlink()
+            return {"ok": True, "message": "플래그 삭제 완료 — 서버 재시작하면 마이그레이션 재실행됩니다"}
+        return {"ok": True, "message": "플래그 파일 없음 — 이미 초기화 상태"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 @app.get("/")
 async def root():
