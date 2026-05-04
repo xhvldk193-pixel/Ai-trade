@@ -1907,12 +1907,8 @@ async def _reflection_loop():
         if _REFLECTION_ENABLED:
             try:
                 _rlog.info("[reflection-loop] 자동 리플렉션 시작")
-                result = await reflect_endpoint()
-                _rlog.info(
-                    "[reflection-loop] 완료 — processed=%s skipped=%s",
-                    result.get("processed", 0),
-                    result.get("skipped_no_baseline", 0),
-                )
+                await _run_reflect_background()
+                _rlog.info("[reflection-loop] 완료")
             except Exception as _exc:
                 _rlog.warning("[reflection-loop] 실패 — %s", _exc)
         await asyncio.sleep(INTERVAL)
@@ -2274,16 +2270,16 @@ async def reflect_endpoint():
     메모리에 누적된 과거 기록들 중 outcome 이 비어 있는 것들을
     백그라운드에서 비동기 처리 — 타임아웃 방지.
     """
-    import asyncio
     asyncio.create_task(_run_reflect_background())
-    return {"ok": True, "message": "리플렉션 백그라운드 시작됨"}
+    return {"ok": True, "message": "리플렉션 백그라운드 시작됨", "processed": 0}
+
+
 async def _run_reflect_background():
     """리플렉션 백그라운드 실행 — 타임아웃 없이 처리."""
     if not _REFLECTION_ENABLED:
         return
-    import asyncio as _asyncio
     import datetime as _dt
-    loop = _asyncio.get_event_loop()
+    loop = asyncio.get_event_loop()
 
     # 현재가 수집 (단일 호출) — 분석 executor 와 분리하여 경쟁 방지
     try:
