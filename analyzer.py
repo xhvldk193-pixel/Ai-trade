@@ -105,9 +105,9 @@ USER_PROMPT_TEMPLATE = """분석 기준 시각: {now_kst} (KST)
 • 하방 이탈 트리거: $[숫자 또는 N/A]
 
 🤖 매매 파라미터
-• 진입가: $[숫자 또는 N/A]  ← 현재 관점에서 진입하기 좋은 가격
+• 진입가: $[숫자]            ← 되돌림 진입이면 낮은 값 하나만, 즉시 진입이면 현재가. 반드시 단일 숫자
 • 손절가: $[숫자]            ← 관점이 틀렸을 때 청산할 가격 (필수)
-• 목표가: $[숫자 또는 N/A]  ← 1차 익절 목표
+• 목표가: $[숫자]            ← 1차 익절 목표 (필수, N/A 금지)
 • 권장 레버리지: [숫자]배    ← 현재 변동성·리스크를 고려한 최적 레버리지 (1~10 범위)
 
 📝 대응
@@ -120,6 +120,7 @@ USER_PROMPT_TEMPLATE = """분석 기준 시각: {now_kst} (KST)
 
 중요:
 - [시장 레짐]은 반드시 위 6개 중 정확히 1개만 쓰고, 괄호 설명이나 복수 선택을 하지 마세요.
+- [매매 파라미터] 진입가·손절가·목표가는 반드시 단일 숫자 하나만. 범위($79,400~79,500), N/A, 조건부 표기 절대 금지.
 - [관심 레벨]의 4개 항목과 [매매 파라미터]의 4개 항목은 각 줄마다 숫자 또는 N/A만 적으세요. 이유·조건·괄호 설명 금지.
 - 2차 저항/지지 같은 추가 항목을 만들지 마세요.
 - [권장 레버리지]는 반드시 정수(예: 3배, 5배)로만 적고 범위·슬래시 표기 금지.
@@ -582,6 +583,16 @@ def parse_trade_levels(text: str) -> dict:
                 return float(val)
             except ValueError:
                 return None
+
+        # 범위 표기 폴백: "79,400~79,500" or "$79,400~79,500" → 낮은 값 사용
+        range_match = re.search(r'\$?([\d,]+(?:\.\d+)?)\s*[~–\-]\s*\$?([\d,]+(?:\.\d+)?)', value_text)
+        if range_match:
+            try:
+                v1 = float(range_match.group(1).replace(",", ""))
+                v2 = float(range_match.group(2).replace(",", ""))
+                return min(v1, v2)
+            except ValueError:
+                pass
 
         numeric_only_match = re.fullmatch(r'([\d,]+(?:\.\d+)?)', value_text)
         if not numeric_only_match:
