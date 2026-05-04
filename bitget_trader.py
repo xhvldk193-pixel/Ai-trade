@@ -267,17 +267,19 @@ class BitgetClient:
 # ──────────────────────────────────────────
 # TP/SL 유효성 검사
 # ──────────────────────────────────────────
-def _validate_tpsl(direction, price, tp, sl):
+def _validate_tpsl(direction, price, tp, sl, entry=None):
+    """TP/SL 방향 검증. entry가 있으면 entry 기준, 없으면 현재가 기준."""
+    ref = entry if entry is not None else price
     if direction == "long":
-        if tp is not None and tp <= price:
-            log.warning("[TPSL] 롱 TP(%.2f) ≤ 현재가(%.2f) → 무시", tp, price); tp = None
-        if sl is not None and sl >= price:
-            log.warning("[TPSL] 롱 SL(%.2f) ≥ 현재가(%.2f) → 무시", sl, price); sl = None
+        if tp is not None and tp <= ref:
+            log.warning("[TPSL] 롱 TP(%.2f) ≤ 기준가(%.2f) → 무시", tp, ref); tp = None
+        if sl is not None and sl >= ref:
+            log.warning("[TPSL] 롱 SL(%.2f) ≥ 기준가(%.2f) → 무시", sl, ref); sl = None
     else:
-        if tp is not None and tp >= price:
-            log.warning("[TPSL] 숏 TP(%.2f) ≥ 현재가(%.2f) → 무시", tp, price); tp = None
-        if sl is not None and sl <= price:
-            log.warning("[TPSL] 숏 SL(%.2f) ≤ 현재가(%.2f) → 무시", sl, price); sl = None
+        if tp is not None and tp >= ref:
+            log.warning("[TPSL] 숏 TP(%.2f) ≥ 기준가(%.2f) → 무시", tp, ref); tp = None
+        if sl is not None and sl <= ref:
+            log.warning("[TPSL] 숏 SL(%.2f) ≤ 기준가(%.2f) → 무시", sl, ref); sl = None
     return tp, sl
 
 
@@ -330,7 +332,9 @@ class BitgetAutoTrader:
                 tp = float(raw_tp)
             if isinstance(raw_sl, (int, float)) and raw_sl > 0:
                 sl = float(raw_sl)
-        return _validate_tpsl(direction, price, tp, sl)
+        # entry 기준으로 검증 (지정가 진입 시 현재가와 다를 수 있음)
+        entry = float(trade_levels.get("entry") or price) if trade_levels else price
+        return _validate_tpsl(direction, price, tp, sl, entry=entry)
 
     def execute(self, signal, confidence, price,
                 trade_levels=None, tf_data=None) -> dict:
