@@ -121,9 +121,10 @@ REFLECTION_USER_TEMPLATE = """[과거 판단 시점] {past_ts}
 현재가: ${price_now:,.2f}
 변화율: {pct_change:+.2f}% ({direction})
 경과 시간: {elapsed_label}
-
-위 정보를 바탕으로 리플렉션을 작성하세요. 마지막 줄은 반드시
-'다음 체크리스트:' 로 시작하는 1~2줄 요약으로 마치세요.
+{tpsl_block}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{missed_block}위 정보를 바탕으로 리플렉션을 작성하세요.
+{missed_instruction}마지막 줄은 반드시 '다음 체크리스트:' 로 시작하는 1~2줄 요약으로 마치세요.
 """
 
 
@@ -263,6 +264,62 @@ def reflect_for_role(
         pct = (price_now - price_then) / price_then * 100.0
     direction = "상승" if pct > 0 else ("하락" if pct < 0 else "정체")
 
+    # ── TP/SL 도달 여부 평가 블록 ──────────────────────
+    tpsl_block = ""
+    missed_block = ""
+    missed_instruction = ""
+
+    # 메모리 record에서 trade_levels 꺼내기
+    _rec = next((r for r in memory.list_pending_reflections(min_age_seconds=0, limit=9999)
+                 if r.timestamp == record_ts), None)
+    _meta = (_rec.meta or {}) if _rec else {}
+    _tl = _meta.get("trade_levels") or {}
+    _tp = _tl.get("target")
+    _sl = _tl.get("stop")
+    _is_missed = _meta.get("missed", False)
+    _signal = _meta.get("signal", "")
+
+    if _tp or _sl:
+        tpsl_lines = ["\n[매매 파라미터 사후 평가]"]
+        if _tp:
+            _tp_reached = (
+                (_signal == "매수" and price_now >= _tp) or
+                (_signal == "매도" and price_now <= _tp)
+            )
+            tpsl_lines.append(
+                f"목표가(TP): ${_tp:,.2f} → {'✅ 도달' if _tp_reached else '❌ 미도달'}"
+                f" (현재가와 차이: {abs(price_now - _tp):,.2f})"
+            )
+        if _sl:
+            _sl_hit = (
+                (_signal == "매수" and price_now <= _sl) or
+                (_signal == "매도" and price_now >= _sl)
+            )
+            tpsl_lines.append(
+                f"손절가(SL): ${_sl:,.2f} → {'🔴 손절 발생' if _sl_hit else '✅ 미터치'}"
+                f" (현재가와 차이: {abs(price_now - _sl):,.2f})"
+            )
+        # 되돌림 깊이 평가
+        if _signal == "매수" and _sl:
+            _pullback_pct = (price_then - price_now) / price_then * 100 if price_now < price_then else 0
+            if _pullback_pct > 0:
+                tpsl_lines.append(
+                    f"되돌림 깊이: -{_pullback_pct:.2f}% "
+                    f"(진입가 대비 ${price_then - price_now:,.2f} 하락)"
+                )
+        tpsl_block = "\n".join(tpsl_lines)
+
+    if _is_missed:
+        missed_block = (
+            "⚠️ 이 기록은 진입 거부된 케이스입니다.\n"
+            "진입하지 못한 이유와 이후 가격 흐름을 대조해 '진입 조건이 너무 엄격했는지' 또는 "
+            "'거부가 올바른 판단이었는지' 평가하세요.\n특히 되돌림 깊이와 진입 구간의 적절성에 집중하세요.\n\n"
+        )
+        missed_instruction = (
+            "되돌림 패턴 관점에서: 진입 구간 설정이 적절했는가, "
+            "얕은 되돌림 후 재상승 패턴이 나타났는가를 반드시 포함하세요.\n"
+        )
+
     system_prompt = ROLE_REFLECTION_SYSTEMS.get(role, DEFAULT_REFLECTION_SYSTEM)
     prompt = REFLECTION_USER_TEMPLATE.format(
         past_ts=record_ts,
@@ -274,6 +331,9 @@ def reflect_for_role(
         pct_change=pct,
         direction=direction,
         elapsed_label=_elapsed_label(elapsed_seconds),
+        tpsl_block=tpsl_block,
+        missed_block=missed_block,
+        missed_instruction=missed_instruction,
     )
 
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
