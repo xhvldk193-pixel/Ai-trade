@@ -2151,6 +2151,10 @@ async def _migrate_history_to_memory():
                     dedup_threshold=0.0,
                 )
                 if _rec:
+                    # 원래 분석 타임스탬프로 교체 (4시간 경과 판정을 위해)
+                    if _ts:
+                        _rec.timestamp = _ts
+                        _mem._rewrite_disk()
                     _added += 1
                     _existing.add(_ts)
         if _added > 0:
@@ -2371,7 +2375,7 @@ async def _run_reflect_background():
 
     # ── Analyst 메모리 리플렉션 ─────────────────────────
     analyst_memory = _get_memory("analyst")
-    pending = analyst_memory.list_pending_reflections(min_age_seconds=14400.0, limit=5)
+    pending = analyst_memory.list_pending_reflections(min_age_seconds=7200.0, limit=5)
 
     for rec in pending:
         try:
@@ -2413,7 +2417,7 @@ async def _run_reflect_background():
             agent_mems = _get_agent_memories()
             for role in _AGENT_ROLES_FOR_REFLECT:
                 role_mem = agent_mems.get(role)
-                role_pending = role_mem.list_pending_reflections(min_age_seconds=14400.0, limit=3)
+                role_pending = role_mem.list_pending_reflections(min_age_seconds=7200.0, limit=3)
                 for rec in role_pending:
                     try:
                         ts = _dt.datetime.fromisoformat(rec.timestamp.replace("Z", "+00:00"))
