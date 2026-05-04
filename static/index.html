@@ -5023,17 +5023,21 @@ async function runReflection() {
       if (status) status.textContent = `실패: ${data.error || "오류"}`;
     } else {
       if (status) {
-        const processed = data.processed || 0;
-        const total = data.memory_size ?? data.analyst_memory_size ?? 0;
-        const pending = data.pending_count ?? 0;
-        if (processed > 0) {
-          status.textContent = `${processed}건 리플렉션 완료 (전체 ${total}건 · 대기 ${pending}건)`;
-        } else if (total === 0) {
-          status.textContent = `저장된 분석 기록이 없습니다. 분석을 먼저 실행해주세요.`;
-        } else if (pending === 0) {
-          status.textContent = `모든 기록이 이미 리플렉션 완료됐습니다 (전체 ${total}건)`;
+        if (data.message && data.message.includes("백그라운드")) {
+          status.textContent = "리플렉션 백그라운드 실행 중... 잠시 후 완료됩니다.";
         } else {
-          status.textContent = `대기 기록 ${pending}건이 30분 미경과로 아직 대상 아님 (전체 ${total}건)`;
+          const processed = data.processed || 0;
+          const total = data.memory_size ?? data.analyst_memory_size ?? 0;
+          const pending = data.pending_count ?? 0;
+          if (processed > 0) {
+            status.textContent = `${processed}건 리플렉션 완료 (전체 ${total}건 · 대기 ${pending}건)`;
+          } else if (total === 0) {
+            status.textContent = `저장된 분석 기록이 없습니다. 분석을 먼저 실행해주세요.`;
+          } else if (pending === 0) {
+            status.textContent = `모든 기록이 이미 리플렉션 완료됐습니다 (전체 ${total}건)`;
+          } else {
+            status.textContent = `대기 기록 ${pending}건이 4시간 미경과로 아직 대상 아님 (전체 ${total}건)`;
+          }
         }
       }
     }
