@@ -372,8 +372,11 @@ class BitgetAutoTrader:
         result["tp"] = tp
         result["sl"] = sl
 
+        # R:R 계산 기준가 — entry 파싱 성공 시 entry 사용, 없으면 현재가
+        _entry_for_rr = float((trade_levels or {}).get("entry") or price)
+        result["entry"] = _entry_for_rr
+
         # ── SL 필수 체크 ──────────────────────────────
-        # SL 없이 진입하면 레버리지 × 전체배분 규모가 무한손실 가능
         if sl is None:
             result["reason"] = "SL 미설정 → 진입 거부 (손실 무한 리스크)"
             self._last = result
@@ -382,12 +385,12 @@ class BitgetAutoTrader:
 
         # ── 최소 손익비(R:R) 체크 ────────────────────
         if tp is not None:
-            rr = abs(tp - price) / abs(sl - price)
+            rr = abs(tp - _entry_for_rr) / abs(sl - _entry_for_rr)
             result["rr"] = round(rr, 2)
             if rr < self.MIN_RR:
                 result["reason"] = (
                     f"R:R {rr:.2f} < 최소 {self.MIN_RR} → 진입 거부"
-                    f" (TP ${tp:,.2f} / SL ${sl:,.2f})"
+                    f" (TP ${tp:,.2f} / SL ${sl:,.2f} / 진입가 ${_entry_for_rr:,.2f})"
                 )
                 self._last = result
                 log.warning("[AutoTrader] R:R 불충분(%.2f) → 진입 취소", rr)
