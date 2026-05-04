@@ -2382,6 +2382,7 @@ async def _run_reflect_background():
     # ── Analyst 메모리 리플렉션 ─────────────────────────
     analyst_memory = _get_memory("analyst")
     pending = analyst_memory.list_pending_reflections(min_age_seconds=7200.0, limit=5)
+    print(f"[reflect-bg] analyst 전체={analyst_memory.size()}건 / pending={len(pending)}건", flush=True)
 
     for rec in pending:
         try:
