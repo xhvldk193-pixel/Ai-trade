@@ -2094,6 +2094,73 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                 _lg.getLogger("auto-trader").warning("[AutoTrade] 놓친 진입 메모리 기록 실패 — %s", _me)
 
 
+async def _migrate_history_to_memory():
+    """과거 분석 히스토리를 reflection 메모리에 임포트 (서버 시작 후 1회)."""
+    if _get_memory is None:
+        return
+    try:
+        import json as _json
+        _hist_path = os.path.join(BASE_DIR, "data", "analysis_history.jsonl")
+        if not os.path.exists(_hist_path):
+            return
+        _mem = _get_memory("analyst")
+        _existing = {r.timestamp for r in _mem.list_records()}
+        _added = 0
+        with open(_hist_path, encoding="utf-8") as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if not _line:
+                    continue
+                try:
+                    _e = _json.loads(_line)
+                except Exception:
+                    continue
+                _signal = _e.get("signal", "")
+                _price  = _e.get("price")
+                _ts     = _e.get("timestamp", "")
+                if _signal in ("홀드", "HOLD", "hold"):
+                    continue
+                if not isinstance(_price, (int, float)) or _price <= 0:
+                    continue
+                if _ts in _existing:
+                    continue
+                _tl   = _e.get("trade_levels") or {}
+                _conf = _e.get("confidence", 0)
+                _situation = (
+                    f"[과거 분석 — {_ts}]\n"
+                    f"신호: {_signal} | 확신도: {_conf}% | 가격: ${_price:,.2f}\n"
+                    f"레짐: {_e.get('regime', '')}\n"
+                    f"요약: {str(_e.get('summary', ''))[:300]}"
+                )
+                _advice = f"{_signal} 신호 (확신도 {_conf}%)"
+                if _tl.get("entry"):  _advice += f" | 진입가 ${_tl['entry']:,.2f}"
+                if _tl.get("target"): _advice += f" | TP ${_tl['target']:,.2f}"
+                if _tl.get("stop"):   _advice += f" | SL ${_tl['stop']:,.2f}"
+                _rec = _mem.add_situation(
+                    situation=_situation,
+                    advice=_advice,
+                    outcome="",
+                    meta={
+                        "price_at_analysis": float(_price),
+                        "trade_levels": _tl,
+                        "signal": _signal,
+                        "confidence": _conf,
+                        "missed": False,
+                        "imported_from_history": True,
+                    },
+                    dedup_threshold=0.0,
+                )
+                if _rec:
+                    _added += 1
+                    _existing.add(_ts)
+        if _added > 0:
+            print(f"[migration] 과거 분석 {_added}건 메모리 임포트 완료", flush=True)
+        else:
+            print(f"[migration] 새로 임포트할 기록 없음 (전체 {_mem.size()}건)", flush=True)
+    except Exception as _me:
+        print(f"[migration] 실패 (무시): {_me}", flush=True)
+
+
 @app.on_event("startup")
 async def on_startup():
     telegram_alert.init(os.environ.get("TELEGRAM_BOT_TOKEN",""), os.environ.get("TELEGRAM_CHAT_ID",""))
@@ -2103,6 +2170,10 @@ async def on_startup():
     await _macro_snapshot.start()
     await _schedule_manager.start()
     # asyncio.create_task(_reflection_loop(), name="reflection-loop")  # 매매 체결 시에만 실행
+
+    # ── 과거 분석 히스토리 → 메모리 마이그레이션 ──────────────
+    # server 싱글턴 초기화 후 실행해야 같은 인스턴스를 공유함
+    asyncio.create_task(_migrate_history_to_memory())
 
 
 @app.on_event("shutdown")
