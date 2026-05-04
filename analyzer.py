@@ -19,11 +19,11 @@ from agents import (
     PipelineResult,
 )
 try:
-    from agents import get_memory  # may be None if rank_bm25 missing
+    from agents.memory import get_memory  # may be None if rank_bm25 missing
 except Exception:
     get_memory = None  # type: ignore
 try:
-    from agents import get_agent_memories  # AgentMemories 싱글턴 팩토리
+    from agents.memory import get_agent_memories  # AgentMemories 싱글턴 팩토리
 except Exception:
     get_agent_memories = None  # type: ignore
 try:
