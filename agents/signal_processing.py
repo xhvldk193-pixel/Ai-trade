@@ -180,15 +180,21 @@ def extract_trading_signal(
             # 방향이 일치하는지 확인
             judge_aligned = (judge_bias > 0) == (strength > 0)
             if not judge_aligned:
+                # 불일치 시 확신도 10% 하향 — 가짜 확신 방지
+                penalty = 10
+                confidence = max(0, confidence - penalty)
                 notes.append(
-                    f"⚠️ 애널리스트({raw_view})와 심판({judge_verdict}) 방향 불일치 — 확신도 신중하게 해석"
+                    f"⚠️ 애널리스트({raw_view})와 심판({judge_verdict}) 방향 불일치 "
+                    f"— 확신도 -{penalty}% 조정 → {confidence}%"
                 )
             else:
                 notes.append(
                     f"✅ 심판 판정({judge_verdict})이 애널리스트 관점과 일치"
                 )
         elif judge_bias == 0 and strength != 0:
-            notes.append(f"심판 판정 중립 — 시장 방향 불확실성 고려")
+            # Judge 중립인데 Analyst가 방향성 있으면 소폭 하향
+            confidence = max(0, confidence - 5)
+            notes.append(f"심판 판정 중립 — 확신도 -5% 조정 → {confidence}%")
         elif judge_bias != 0 and strength == 0:
             notes.append(f"심판 판정 {judge_verdict} — 홀드 구간에서 방향성 힌트")
 
