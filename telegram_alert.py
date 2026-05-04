@@ -26,10 +26,11 @@ def alert_trade(r):
     e = "🟢 롱" if a == "long" else "🔴 숏"
     rr = r.get("rr")
     rr_str = f"\nR:R {rr:.2f}" if rr else ""
+    entry = r.get("entry") or r.get("price", 0)
     send(
         f"{e} 진입\n"
         f"확신도 {r.get('confidence')}%\n"
-        f"진입가 ${r.get('price', 0):,.0f}\n"
+        f"진입가 ${entry:,.0f}\n"
         f"TP ${r.get('tp') or 0:,.0f}\n"
         f"SL ${r.get('sl') or 0:,.0f}"
         f"{rr_str}"
