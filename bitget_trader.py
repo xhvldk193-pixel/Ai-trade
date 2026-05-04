@@ -308,8 +308,9 @@ class BitgetAutoTrader:
                 acct = self.get_account()
                 equity = float(acct.get("equity", 0) or 0)
                 usdt = equity * (self.usdt_per_trade / 100) * 0.95  # 5% 수수료 여유
-            except:
-                usdt = 100  # 폴백
+            except Exception as _e:
+                log.warning("[AutoTrader] 잔고 조회 실패 — 진입 차단: %s", _e)
+                usdt = 0  # 폴백 $100 대신 0으로 진입 차단
         else:
             usdt = self.usdt_per_trade
         return round((usdt * self.leverage) / price, 4)
@@ -397,18 +398,37 @@ class BitgetAutoTrader:
             log.warning("[AutoTrader] TP 없음 — R:R 미검증 진입 (SL만 설정)")
 
         size = self._contracts(price)
+        if size <= 0:
+            result["reason"] = "잔고 조회 실패 또는 계산된 계약수 0 → 진입 차단"
+            self._last = result
+            log.warning("[AutoTrader] size=0 → 진입 취소")
+            return result
+
         order_side = "open_long" if desired == "long" else "open_short"
 
         # 진입가 기반 시장가/지정가 결정
+        # 0.2% 버퍼: 되돌림이 진입가 근처까지만 와도 체결되도록
+        ENTRY_BUFFER = float(os.environ.get("AUTO_TRADE_ENTRY_BUFFER", "0.002"))
         entry_price = trade_levels.get("entry") if trade_levels else None
         use_limit = False
         if entry_price and price:
-            if desired == "short" and price < entry_price:
-                # 숏: 현재가가 진입가보다 낮으면 지정가
-                use_limit = True
-            elif desired == "long" and price > entry_price:
+            if desired == "long" and price > entry_price:
                 # 롱: 현재가가 진입가보다 높으면 지정가
-                use_limit = True
+                # 버퍼 적용: entry_price * (1 + 0.2%) 까지 허용
+                buffered_entry = entry_price * (1 + ENTRY_BUFFER)
+                if price <= buffered_entry:
+                    # 버퍼 안에 들어오면 현재가로 시장가 진입
+                    entry_price = None
+                else:
+                    use_limit = True
+            elif desired == "short" and price < entry_price:
+                # 숏: 현재가가 진입가보다 낮으면 지정가
+                # 버퍼 적용: entry_price * (1 - 0.2%) 까지 허용
+                buffered_entry = entry_price * (1 - ENTRY_BUFFER)
+                if price >= buffered_entry:
+                    entry_price = None
+                else:
+                    use_limit = True
 
         if use_limit and entry_price:
             order_resp = self.client.place_order(self.symbol, order_side, size, order_type="limit", price=entry_price, tp=tp, sl=sl)

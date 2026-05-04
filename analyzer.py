@@ -818,9 +818,18 @@ def run_full_analysis(
             print(f"[AGENTMEM-ERR] {exc}", flush=True)
             _memory_logger.warning("get_agent_memories 실패 — %s", exc)
 
-    # 쿼리로는 정규화 태그를 쓰고, 태그가 없으면 blob 앞 200자만 사용
-    # (context_blob 전체는 수천 토큰이어서 BM25 잡음이 심해짐)
-    memory_query = situation_tags or context_blob[:200]
+    # 쿼리로는 정규화 태그를 쓰고, 태그가 없으면 핵심 키워드 라인 추출
+    if situation_tags:
+        memory_query = situation_tags
+    else:
+        _kw_lines = []
+        for _l in context_blob.splitlines():
+            _s = _l.strip()
+            if any(kw in _s for kw in ("RSI", "MACD", "펀딩", "추세", "정렬", "스큐", "OI", "포지션")):
+                _kw_lines.append(_s)
+            if len(_kw_lines) >= 8:
+                break
+        memory_query = " | ".join(_kw_lines) if _kw_lines else context_blob[:300]
 
     # 3) 파이프라인 실행: Bull/Bear → Judge → Risk Triad → Memory
     pipeline = run_pipeline(
