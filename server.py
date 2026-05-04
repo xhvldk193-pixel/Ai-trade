@@ -2270,31 +2270,18 @@ async def analyze_status(include_latest: bool = False):
 async def reflect_endpoint():
     """
     메모리에 누적된 과거 기록들 중 outcome 이 비어 있는 것들을
-    '현재가 vs 기록 당시 가격' 변화와 함께 역할별 Reflection 에이전트에 돌려
-    교훈을 기록한다.
-
-    처리 대상:
-      - analyst 메모리 (종합 리포트)
-      - bull/bear/judge/aggressive/conservative/neutral 에이전트 메모리
-
-    사용 예:
-      - 프론트엔드 '리플렉션' 버튼
-      - schedule 스킬로 6시간마다 자동 호출
-
-    가격 베이스라인 우선순위 (analyst):
-      1) meta["price_at_analysis"]  ← 분석 시점 현재가 (정확)
-      2) meta["trade_levels"]["entry"]  ← 진입가가 있으면 그것
-      3) skip (잘못된 피드백 방지)
-    에이전트 역할 메모리: meta["price_at_analysis"] 또는 skip
+    백그라운드에서 비동기 처리 — 타임아웃 방지.
     """
+    import asyncio
+    asyncio.create_task(_run_reflect_background())
+    return {"ok": True, "message": "리플렉션 백그라운드 시작됨"}
+async def _run_reflect_background():
+    """리플렉션 백그라운드 실행 — 타임아웃 없이 처리."""
     if not _REFLECTION_ENABLED:
-        return {
-            "ok": False,
-            "error": "rank_bm25 또는 관련 모듈이 설치되지 않아 reflection 을 사용할 수 없습니다.",
-        }
-
-    loop = asyncio.get_event_loop()
+        return
+    import asyncio as _asyncio
     import datetime as _dt
+    loop = _asyncio.get_event_loop()
 
     # 현재가 수집 (단일 호출) — 분석 executor 와 분리하여 경쟁 방지
     try:
@@ -2410,6 +2397,8 @@ async def reflect_endpoint():
         "pending_count": still_pending,
         "results": all_results,
     }
+
+
 
 
 @app.get("/api/macro")
