@@ -204,7 +204,18 @@ def run_risk_triad(
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
     result = RiskTriadResult(enabled=True, rounds=rounds)
 
-    _query = memory_query or context_blob[:200]
+    # 메모리 쿼리 개선: 키워드 라인 추출
+    if memory_query:
+        _query = memory_query
+    else:
+        _kw_lines = []
+        for _l in context_blob.splitlines():
+            _s = _l.strip()
+            if any(kw in _s for kw in ("RSI", "MACD", "펀딩", "추세", "정렬", "스큐", "OI", "포지션")):
+                _kw_lines.append(_s)
+            if len(_kw_lines) >= 8:
+                break
+        _query = " | ".join(_kw_lines) if _kw_lines else context_blob[:300]
     last = {"aggressive": "", "conservative": "", "neutral": ""}
 
     # 루프 전 한 번만 계산 (반복 낭비 방지)
