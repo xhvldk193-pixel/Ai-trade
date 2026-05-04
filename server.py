@@ -62,19 +62,24 @@ from time_utils import format_kst, now_kst
 # ── Reflection / Memory (optional: rank_bm25 미설치 시 None) ──
 try:
     from agents.memory import get_memory as _get_memory, get_agent_memories as _get_agent_memories
+    _MEMORY_OK = True
+except Exception as _mem_exc:
+    _get_memory = None
+    _get_agent_memories = None
+    _MEMORY_OK = False
+    print(f"[WARN] agents.memory 로드 실패 — {_mem_exc}", flush=True)
+
+try:
     from agents.reflection import reflect_on_record as _reflect_on_record, reflect_for_role as _reflect_for_role
-    _REFLECTION_ENABLED = True
-except Exception as _reflect_exc:  # pragma: no cover
-    _get_memory = None             # type: ignore
-    _get_agent_memories = None     # type: ignore
-    _reflect_on_record = None      # type: ignore
-    _reflect_for_role = None       # type: ignore
-    _REFLECTION_ENABLED = False
-    import logging as _logging
-    _logging.getLogger(__name__).warning(
-        "Reflection/Memory 비활성 — %s: %s",
-        type(_reflect_exc).__name__, _reflect_exc,
-    )
+    _REFLECT_OK = True
+except Exception as _ref_exc:
+    _reflect_on_record = None
+    _reflect_for_role = None
+    _REFLECT_OK = False
+    print(f"[WARN] agents.reflection 로드 실패 — {_ref_exc}", flush=True)
+
+_REFLECTION_ENABLED = _MEMORY_OK and _REFLECT_OK
+print(f"[init] REFLECTION_ENABLED={_REFLECTION_ENABLED} (memory={_MEMORY_OK}, reflect={_REFLECT_OK})", flush=True)
 
 # 에이전트 메모리 역할 목록 (analyst 는 별도 memory 이름 사용)
 _AGENT_ROLES_FOR_REFLECT = ("bull", "bear", "judge", "aggressive", "conservative", "neutral")
@@ -2096,9 +2101,7 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
 
 async def _migrate_history_to_memory():
     """과거 분석 히스토리를 reflection 메모리에 임포트 (서버 시작 후 1회)."""
-    print(f"[migration] 시작 — _get_memory={_get_memory}", flush=True)
     if _get_memory is None:
-        print("[migration] _get_memory가 None — 건너뜀", flush=True)
         return
     try:
         import json as _json
@@ -2348,6 +2351,7 @@ async def reflect_endpoint():
 async def _run_reflect_background():
     """리플렉션 백그라운드 실행 — 타임아웃 없이 처리."""
     if not _REFLECTION_ENABLED:
+        print("[reflect-bg] REFLECTION_ENABLED=False — 건너뜀", flush=True)
         return
     import datetime as _dt
     loop = asyncio.get_event_loop()
