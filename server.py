@@ -2096,7 +2096,9 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
 
 async def _migrate_history_to_memory():
     """과거 분석 히스토리를 reflection 메모리에 임포트 (서버 시작 후 1회)."""
+    print(f"[migration] 시작 — _get_memory={_get_memory}", flush=True)
     if _get_memory is None:
+        print("[migration] _get_memory가 None — 건너뜀", flush=True)
         return
     try:
         import json as _json
