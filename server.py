@@ -2010,9 +2010,10 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                     f"{_action.upper()} 진입 실행\n"
                     f"진입가 ${_entry:,.2f} | TP ${_tp:,.2f} | SL ${_sl:,.2f}"
                 )
-                _trade_mem.add(
+                _trade_mem.add_situation(
                     situation=_trade_situation,
                     advice=_trade_advice,
+                    outcome="",
                     meta={
                         "price_at_analysis": float(_entry),
                         "trade_levels": trade_levels,
@@ -2085,9 +2086,10 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                     f"R:R: {_rr if _rr else 'N/A'}\n"
                     f"분석요약: {str(analysis.get('summary',''))[:200]}"
                 )
-                _missed_mem.add(
+                _missed_mem.add_situation(
                     situation=_missed_situation,
                     advice=f"진입 거부됨 — {_reason}",
+                    outcome="",
                     meta={
                         "price_at_analysis": float(price),
                         "trade_levels": trade_levels,
