@@ -1986,6 +1986,51 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
         telegram_alert.alert_trade(result)
         telegram_alert.alert_trade_rejected({**result, "signal": signal, "confidence": confidence, "price": price or 0})
 
+        # ── 실제 진입된 거래 메모리 기록 ──────────────────────────
+        # 리플렉션이 실매매 결과를 학습할 수 있도록 analyst 메모리에 기록
+        if result.get("action") in ("long", "short"):
+            try:
+                from agents.memory import get_memory as _gm
+                _trade_mem = _gm("analyst")
+                _action    = result.get("action")
+                _tp        = result.get("tp")
+                _sl        = result.get("sl")
+                _rr        = result.get("rr")
+                _entry     = result.get("entry") or price
+
+                _trade_situation = (
+                    f"[실매매 진입 — {_action.upper()}]\n"
+                    f"진입가: ${_entry:,.2f} | 확신도: {confidence}% | 레짐: {analysis.get('regime','')}\n"
+                    f"TP: {'$'+f'{_tp:,.2f}' if _tp else 'N/A'} | "
+                    f"SL: {'$'+f'{_sl:,.2f}' if _sl else 'N/A'} | "
+                    f"R:R: {_rr if _rr else 'N/A'}\n"
+                    f"분석요약: {str(analysis.get('summary',''))[:300]}"
+                )
+                _trade_advice = (
+                    f"{_action.upper()} 진입 실행\n"
+                    f"진입가 ${_entry:,.2f} | TP ${_tp:,.2f} | SL ${_sl:,.2f}"
+                )
+                _trade_mem.add(
+                    situation=_trade_situation,
+                    advice=_trade_advice,
+                    meta={
+                        "price_at_analysis": float(_entry),
+                        "trade_levels": trade_levels,
+                        "signal": signal,
+                        "confidence": confidence,
+                        "action": _action,
+                        "rr": _rr,
+                        "tp": _tp,
+                        "sl": _sl,
+                        "missed": False,
+                    }
+                )
+                import logging as _lg2
+                _lg2.getLogger("auto-trader").info("[AutoTrade] 실매매 메모리 기록 완료")
+            except Exception as _me2:
+                import logging as _lg2
+                _lg2.getLogger("auto-trader").warning("[AutoTrade] 실매매 메모리 기록 실패 — %s", _me2)
+
         # 진입 시 시장 스냅샷 저장 (학습용)
         if result.get("action") in ("long", "short"):
             try:
