@@ -12,7 +12,7 @@ _MEMORY_DIR = Path(os.getenv("MEMORY_DIR", str(_BASE / "data" / "memory")))
 try:
     import json, sys
     sys.path.insert(0, str(_BASE))
-    from agents import get_memory as _gm
+    from agents.memory import get_memory as _gm
 
     _hist_path = _BASE / "data" / "analysis_history.jsonl"
     if _hist_path.exists():
