@@ -207,7 +207,17 @@ def run_judge(
 
     # judge 메모리 회상
     past = ""
-    _query = memory_query or context_blob[:200]
+    if memory_query:
+        _query = memory_query
+    else:
+        _kw_lines = []
+        for _l in context_blob.splitlines():
+            _s = _l.strip()
+            if any(kw in _s for kw in ("RSI", "MACD", "펀딩", "추세", "정렬", "스큐", "OI", "포지션")):
+                _kw_lines.append(_s)
+            if len(_kw_lines) >= 8:
+                break
+        _query = " | ".join(_kw_lines) if _kw_lines else context_blob[:300]
     if agent_memories is not None:
         past = agent_memories.recall("judge", _query, top_k=2)
 

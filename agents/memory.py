@@ -134,15 +134,6 @@ class FinancialSituationMemory:
         tmp.replace(self.path)
 
     # ── 내부 dedup 헬퍼 ────────────────────────────
-    @staticmethod
-    def _jaccard(a: list[str], b: list[str]) -> float:
-        if not a or not b:
-            return 0.0
-        sa, sb = set(a), set(b)
-        inter = len(sa & sb)
-        union = len(sa | sb)
-        return inter / union if union else 0.0
-
     # ── API ───────────────────────────────────────
     def add_situation(
         self,
