@@ -7,13 +7,14 @@ import os
 from pathlib import Path
 
 _BASE = Path(__file__).resolve().parent
-_DONE_FLAG = _BASE / "data" / "memory" / ".history_imported"
+_MEMORY_DIR = Path(os.getenv("MEMORY_DIR", str(_BASE / "data" / "memory")))
+_DONE_FLAG = _MEMORY_DIR / ".history_imported"
 
 if not _DONE_FLAG.exists():
     try:
         import json, sys
         sys.path.insert(0, str(_BASE))
-        from agents.memory import get_memory as _gm
+        from agents import get_memory as _gm
 
         _hist_path = _BASE / "data" / "analysis_history.jsonl"
         if _hist_path.exists():
@@ -64,7 +65,7 @@ if not _DONE_FLAG.exists():
                     _added += 1
 
             print(f"[migration] 과거 분석 {_added}건 메모리 임포트 완료", flush=True)
-            _DONE_FLAG.parent.mkdir(parents=True, exist_ok=True)
+            _MEMORY_DIR.mkdir(parents=True, exist_ok=True)
             _DONE_FLAG.touch()
     except Exception as _me:
         print(f"[migration] 실패 (무시): {_me}", flush=True)
