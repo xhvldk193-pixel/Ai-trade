@@ -43,7 +43,20 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = CANDLE_LIMIT) -> pd.Dat
 
 
 def fetch_current_price(symbol: str) -> float:
-    """USDⓈ-M Futures 현재 체결가 반환."""
+    """비트겟 선물 현재 체결가 반환."""
+    # 비트겟 API 우선 시도
+    try:
+        url = "https://api.bitget.com/api/v2/mix/market/ticker"
+        resp = _http.get(url, params={"symbol": symbol, "productType": "USDT-FUTURES"}, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        price = data.get("data", {}).get("lastPr") or data.get("data", [{}])[0].get("lastPr") if isinstance(data.get("data"), list) else data.get("data", {}).get("lastPr")
+        if price:
+            return float(price)
+    except Exception:
+        pass
+
+    # 폴백: 바이낸스
     url = f"{BINANCE_FUTURES_URL}/fapi/v1/ticker/price"
     resp = _http.get(url, params={"symbol": symbol}, timeout=5)
     resp.raise_for_status()

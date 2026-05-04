@@ -522,7 +522,7 @@ def _build_section(window: list[dict], config: dict, latest: dict) -> dict:
     highlights: list[str] = []
     meta = (
         f"실관찰 {_fmt_duration(observed_minutes)} · 표본 {len(window)}개 · "
-        f"{window[0]['observed_label']}~{window[-1]['observed_label']} KST"
+        f"{window[0].get('observed_label', window[0].get('observed_at','?')[:16])}~{window[-1].get('observed_label', window[-1].get('observed_at','?')[:16])} KST"
     )
 
     if config["mode"] == "intraday":
@@ -654,8 +654,8 @@ def _build_section(window: list[dict], config: dict, latest: dict) -> dict:
         "available": True,
         "samples": len(window),
         "observed_minutes": observed_minutes,
-        "observed_from": window[0]["observed_label"],
-        "observed_to": window[-1]["observed_label"],
+        "observed_from": window[0].get("observed_label", window[0].get("observed_at","")[:16]),
+        "observed_to": window[-1].get("observed_label", window[-1].get("observed_at","")[:16]),
         "meta": meta,
         "recent_events": recent_events,
         "highlights": highlights[:4],

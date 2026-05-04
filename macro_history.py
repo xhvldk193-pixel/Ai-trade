@@ -227,7 +227,7 @@ def _build_section(window: list[dict], config: dict) -> dict:
     metrics = {metric: _metric_window(window, metric) for metric in METRIC_CONFIG}
     meta = (
         f"실관찰 {_fmt_duration(observed_minutes)} · 표본 {len(window)}개 · "
-        f"{window[0]['observed_label']}~{window[-1]['observed_label']} KST"
+        f"{window[0].get('observed_label', window[0].get('observed_at','?')[:16])}~{window[-1].get('observed_label', window[-1].get('observed_at','?')[:16])} KST"
     )
 
     lines: list[str] = [f"관찰 구간: {meta}"]
@@ -244,8 +244,8 @@ def _build_section(window: list[dict], config: dict) -> dict:
         "meta": meta,
         "samples": len(window),
         "observed_minutes": observed_minutes,
-        "observed_from": window[0]["observed_label"],
-        "observed_to": window[-1]["observed_label"],
+        "observed_from": window[0].get("observed_label", window[0].get("observed_at","")[:16]),
+        "observed_to": window[-1].get("observed_label", window[-1].get("observed_at","")[:16]),
         "metrics": metrics,
         "lines": lines,
         "highlights": _recent_unique(highlights, limit=4),
