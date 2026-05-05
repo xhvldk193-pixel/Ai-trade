@@ -42,7 +42,60 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = CANDLE_LIMIT) -> pd.Dat
     return df[["open", "high", "low", "close", "volume"]]
 
 
-def fetch_current_price(symbol: str) -> float:
+def fetch_high_low_since(symbol: str, since_ts: str) -> dict:
+    """
+    since_ts(ISO8601) 이후부터 현재까지의 최고가/최저가/현재가 반환.
+    비트겟 API 우선, 실패 시 바이낸스 폴백.
+    
+    Returns: {"high": float, "low": float, "current": float}
+    """
+    import datetime as _dt
+
+    try:
+        since = _dt.datetime.fromisoformat(since_ts.replace("Z", "+00:00"))
+    except Exception:
+        since = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=24)
+
+    # 기간 계산 → 적절한 interval 선택
+    elapsed_h = (_dt.datetime.now(_dt.timezone.utc) - since).total_seconds() / 3600
+
+    if elapsed_h <= 6:
+        interval = "15m"
+        limit = int(elapsed_h * 4) + 5
+    elif elapsed_h <= 24:
+        interval = "1h"
+        limit = int(elapsed_h) + 5
+    elif elapsed_h <= 168:
+        interval = "4h"
+        limit = int(elapsed_h / 4) + 5
+    else:
+        interval = "1d"
+        limit = int(elapsed_h / 24) + 5
+
+    limit = min(max(limit, 5), 200)
+
+    try:
+        df = fetch_ohlcv(symbol, interval, limit)
+        # since 이후 캔들만 필터
+        since_naive = since.replace(tzinfo=None)
+        df_since = df[df.index >= since_naive]
+        if df_since.empty:
+            df_since = df
+
+        high = float(df_since["high"].max())
+        low  = float(df_since["low"].min())
+        current = float(df_since["close"].iloc[-1])
+        return {"high": high, "low": low, "current": current}
+    except Exception:
+        # 폴백: 현재가만 반환
+        try:
+            current = fetch_current_price(symbol)
+            return {"high": current, "low": current, "current": current}
+        except Exception:
+            return {"high": 0, "low": 0, "current": 0}
+
+
+
     """비트겟 선물 현재 체결가 반환."""
     # 비트겟 API 우선 시도
     try:
