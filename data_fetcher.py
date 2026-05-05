@@ -42,6 +42,26 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = CANDLE_LIMIT) -> pd.Dat
     return df[["open", "high", "low", "close", "volume"]]
 
 
+def fetch_current_price(symbol: str) -> float:
+    """비트겟 선물 현재 체결가 반환."""
+    # 비트겟 API 우선 시도
+    try:
+        url = "https://api.bitget.com/api/v2/mix/market/ticker"
+        resp = _http.get(url, params={"symbol": symbol, "productType": "USDT-FUTURES"}, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        price = data.get("data", {}).get("lastPr") or data.get("data", [{}])[0].get("lastPr") if isinstance(data.get("data"), list) else data.get("data", {}).get("lastPr")
+        if price:
+            return float(price)
+    except Exception:
+        pass
+
+    # 폴백: 바이낸스
+    url = f"{BINANCE_FUTURES_URL}/fapi/v1/ticker/price"
+    resp = _http.get(url, params={"symbol": symbol}, timeout=5)
+    resp.raise_for_status()
+    return float(resp.json()["price"])
+
 def fetch_high_low_since(symbol: str, since_ts: str) -> dict:
     """
     since_ts(ISO8601) 이후부터 현재까지의 최고가/최저가/현재가 반환.
@@ -94,23 +114,3 @@ def fetch_high_low_since(symbol: str, since_ts: str) -> dict:
         except Exception:
             return {"high": 0, "low": 0, "current": 0}
 
-
-
-    """비트겟 선물 현재 체결가 반환."""
-    # 비트겟 API 우선 시도
-    try:
-        url = "https://api.bitget.com/api/v2/mix/market/ticker"
-        resp = _http.get(url, params={"symbol": symbol, "productType": "USDT-FUTURES"}, timeout=5)
-        resp.raise_for_status()
-        data = resp.json()
-        price = data.get("data", {}).get("lastPr") or data.get("data", [{}])[0].get("lastPr") if isinstance(data.get("data"), list) else data.get("data", {}).get("lastPr")
-        if price:
-            return float(price)
-    except Exception:
-        pass
-
-    # 폴백: 바이낸스
-    url = f"{BINANCE_FUTURES_URL}/fapi/v1/ticker/price"
-    resp = _http.get(url, params={"symbol": symbol}, timeout=5)
-    resp.raise_for_status()
-    return float(resp.json()["price"])
