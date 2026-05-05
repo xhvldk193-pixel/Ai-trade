@@ -2403,17 +2403,31 @@ async def _run_reflect_background():
                 continue
         price_then = float(price_then)
 
+        # 분석 이후 최고가/최저가 조회 (TP/SL 정확한 도달 여부 판단용)
+        try:
+            from data_fetcher import fetch_high_low_since as _fhls
+            _hl = await asyncio.to_thread(_fhls, DEFAULT_SYMBOL, rec.timestamp)
+            _price_high = _hl.get("high")
+            _price_low  = _hl.get("low")
+            _price_now_rec = _hl.get("current") or price_now
+        except Exception:
+            _price_high = None
+            _price_low  = None
+            _price_now_rec = price_now
+
         res = await loop.run_in_executor(
             _executor,
-            lambda r=rec, pt=price_then, el=elapsed: _reflect_for_role(
+            lambda r=rec, pt=price_then, el=elapsed, pn=_price_now_rec, ph=_price_high, pl=_price_low: _reflect_for_role(
                 role="analyst",
                 record_ts=r.timestamp,
                 situation=r.situation,
                 advice=r.advice,
                 price_then=pt,
-                price_now=price_now,
+                price_now=pn,
                 elapsed_seconds=el,
                 memory=analyst_memory,
+                price_high=ph,
+                price_low=pl,
             ),
         )
         all_results.append(res.to_dict())
