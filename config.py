@@ -61,7 +61,8 @@ AUTO_TRADE_LEVERAGE = int(_safe_env("AUTO_TRADE_LEVERAGE",  "3"))     # 레버�
 AUTO_TRADE_MIN_CONF = int(_safe_env("AUTO_TRADE_MIN_CONF",  "65"))    # 최소 AI 확신도 (%)
 AUTO_TRADE_USE_TP   = _safe_env("AUTO_TRADE_USE_TP", "true").lower()  == "true"
 AUTO_TRADE_USE_SL   = _safe_env("AUTO_TRADE_USE_SL", "true").lower()  == "true"
-# ATR 관련 파라미터 제거 — AI 피보나치 TP/SL 직접 사용
+# TP 누락 시 자동 보정: SL 거리의 N배를 자동 TP 로 사용 (0 이면 기능 비활성 → 진입 거부)
+AUTO_TRADE_AUTO_TP_RR = float(_safe_env("AUTO_TRADE_AUTO_TP_RR", "1.5"))
 
 
 def symbol_to_pair(symbol: str) -> str:
