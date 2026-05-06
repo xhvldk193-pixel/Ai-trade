@@ -38,16 +38,22 @@ class BitgetClient:
                     today_pnl = 0.0
                     try:
                         import datetime as _dt
-                        # 오늘 00:00 UTC 타임스탬프 (밀리초)
-                        now = _dt.datetime.utcnow()
-                        start_ts = int(_dt.datetime(now.year, now.month, now.day).timestamp() * 1000)
+                        # 오늘 UTC 자정 타임스탬프 (밀리초) — tz-aware 필수
+                        # datetime.utcnow() 는 deprecated 이고, 결과를 timestamp() 하면
+                        # 로컬 타임존으로 해석되어 9시간 어긋난 PnL 집계되는 버그가 있었음.
+                        now_utc = _dt.datetime.now(_dt.timezone.utc)
+                        start_utc = _dt.datetime(
+                            now_utc.year, now_utc.month, now_utc.day,
+                            tzinfo=_dt.timezone.utc,
+                        )
+                        start_ts = int(start_utc.timestamp() * 1000)
                         pnl_data = self._ex.fetch_my_trades(
                             f"BTC/USDT:USDT",
                             params={"productType": "USDT-FUTURES", "startTime": str(start_ts)}
                         )
                         today_pnl = sum(float(t.get("info", {}).get("profit", 0) or 0) for t in pnl_data)
                     except Exception as pnl_err:
-                        print(f"[PNL-ERR] {pnl_err}", flush=True)
+                        log.warning("[PNL-ERR] %s", pnl_err)
                     return {"equity": total, "available": free, "unrealizedPL": 0.0, "todayProfitLoss": today_pnl}
             except Exception as e:
                 if attempt == 2: raise
@@ -57,8 +63,8 @@ class BitgetClient:
     def get_trade_history(self, symbol: str = "BTCUSDT", days: int = 30) -> list:
         """비트겟 거래 내역 조회 (days일치)."""
         import datetime as _dt
-        now = _dt.datetime.utcnow()
-        start_ts = int((now - _dt.timedelta(days=days)).timestamp() * 1000)
+        now_utc = _dt.datetime.now(_dt.timezone.utc)
+        start_ts = int((now_utc - _dt.timedelta(days=days)).timestamp() * 1000)
         try:
             trades = self._ex.fetch_my_trades(
                 "BTC/USDT:USDT",
@@ -66,7 +72,7 @@ class BitgetClient:
             )
             return trades
         except Exception as e:
-            print(f"[TRADE-HISTORY-ERR] {e}", flush=True)
+            log.warning("[TRADE-HISTORY-ERR] %s", e)
             return []
 
     def get_positions(self, symbol: str = "BTCUSDT") -> list[dict]:
@@ -79,7 +85,8 @@ class BitgetClient:
                 continue
 
             side = p.get("side", "") or p.get("info", {}).get("holdSide", "")
-            print(f"[RAW] side={side} unrealizedPnl={p.get('unrealizedPnl')} info_pnl={p.get('info',{}).get('unrealizedPL')}", flush=True)
+            log.debug("[RAW] side=%s unrealizedPnl=%s info_pnl=%s",
+                      side, p.get("unrealizedPnl"), p.get("info", {}).get("unrealizedPL"))
             entry = float(p.get("entryPrice") or 0)
             mark  = float(p.get("markPrice") or 0)
 
@@ -194,7 +201,7 @@ class BitgetClient:
             "ACCESS-PASSPHRASE": passphrase,
             "Content-Type":      "application/json",
         }
-        print(f"[REST] {path} {body_str}", flush=True)
+        log.debug("[REST] %s %s", path, body_str)
         r = _req.post("https://api.bitget.com" + path, headers=headers, data=body_str, timeout=10)
         d = r.json()
         if d.get("code") not in ("00000", "0"):
@@ -315,7 +322,33 @@ class BitgetAutoTrader:
                 usdt = 0  # 폴백 $100 대신 0으로 진입 차단
         else:
             usdt = self.usdt_per_trade
-        return round((usdt * self.leverage) / price, 4)
+        raw_size = (usdt * self.leverage) / price
+        return self._round_size(raw_size)
+
+    def _round_size(self, raw_size: float) -> float:
+        """거래소 사이즈 스텝(최소 단위)에 맞게 내림 라운딩.
+
+        Bitget BTC USDT-M Futures 의 사이즈 스텝은 0.01 BTC, ETH 는 0.1 ETH 등
+        심볼마다 다름. 잔고가 작거나 BTC 가격이 높으면 raw_size 가 0.0073 같은
+        값이 되어 거래소가 거부함 → step 단위로 내림(올림 아님 — 잔고 초과 방지).
+        env BITGET_SIZE_STEP, BITGET_MIN_SIZE 로 오버라이드 가능.
+        """
+        import math
+        step = float(os.environ.get("BITGET_SIZE_STEP", "0.01"))
+        min_size = float(os.environ.get("BITGET_MIN_SIZE", "0.01"))
+        # 내림 라운딩 (잔고 초과 방지)
+        rounded = math.floor(raw_size / step) * step
+        # 부동소수점 노이즈 정리 (0.01 -> 0.01, 0.30000000000000004 -> 0.3)
+        # step 의 소수 자릿수만큼 round
+        decimals = max(0, -int(math.floor(math.log10(step)))) if step < 1 else 0
+        rounded = round(rounded, decimals)
+        if rounded < min_size:
+            log.warning(
+                "[AutoTrader] 계산 사이즈 %.6f < 최소 %.4f → 0 으로 차단",
+                raw_size, min_size,
+            )
+            return 0.0
+        return rounded
 
     def _current_side(self) -> Optional[str]:
         positions = self.client.get_positions(self.symbol)
@@ -388,10 +421,25 @@ class BitgetAutoTrader:
             return result
 
         # ── 최소 손익비(R:R) 체크 ────────────────────
+        # TP 누락 시 자동 보정: AUTO_TRADE_AUTO_TP_RR 환경변수로 SL 거리의 N배를
+        # 자동 TP 로 사용 (기본 1.5). 0 이면 기능 비활성화 → TP 없이는 진입 거부.
+        _auto_tp_rr = float(os.environ.get("AUTO_TRADE_AUTO_TP_RR", "1.5"))
+        if tp is None and _auto_tp_rr > 0:
+            sl_dist = abs(sl - _entry_for_rr)
+            if sl_dist > 0:
+                if desired == "long":
+                    tp = _entry_for_rr + sl_dist * _auto_tp_rr
+                else:
+                    tp = _entry_for_rr - sl_dist * _auto_tp_rr
+                result["tp"] = tp
+                log.info("[AutoTrader] TP 자동 보정 — SL 거리×%.2f → TP $%.2f", _auto_tp_rr, tp)
+
         if tp is not None:
             rr = abs(tp - _entry_for_rr) / abs(sl - _entry_for_rr)
             result["rr"] = round(rr, 2)
-            if rr < self.MIN_RR:
+            # 부동소수점 epsilon: 자동 보정 비율(예 1.5)이 MIN_RR(1.5)와 같으면
+            # 부동소수점 오차로 1.4999... 가 나와 거부되는 경우가 있음 → 0.01 허용.
+            if rr < self.MIN_RR - 0.01:
                 result["reason"] = (
                     f"R:R {rr:.2f} < 최소 {self.MIN_RR} → 진입 거부"
                     f" (TP ${tp:,.2f} / SL ${sl:,.2f} / 진입가 ${_entry_for_rr:,.2f})"
@@ -400,13 +448,21 @@ class BitgetAutoTrader:
                 log.warning("[AutoTrader] R:R 불충분(%.2f) → 진입 취소", rr)
                 return result
         else:
-            # TP 없으면 R:R 계산 불가 → 진입 허용하되 경고 로그
+            # TP 없고 자동 보정도 비활성 → 진입 거부 (R:R 검증 불가)
             result["rr"] = None
-            log.warning("[AutoTrader] TP 없음 — R:R 미검증 진입 (SL만 설정)")
+            result["reason"] = (
+                "TP 미설정 + 자동 보정 비활성 → 진입 거부 (R:R 검증 불가)"
+            )
+            self._last = result
+            log.warning("[AutoTrader] TP 없음 + 자동 보정 off → 진입 취소")
+            return result
 
         size = self._contracts(price)
         if size <= 0:
-            result["reason"] = "잔고 조회 실패 또는 계산된 계약수 0 → 진입 차단"
+            # 사유: 잔고 부족 / 라운딩 후 최소 사이즈 미만
+            result["reason"] = (
+                "사이즈 0 → 진입 차단 (잔고 부족 또는 거래소 최소 단위 미만)"
+            )
             self._last = result
             log.warning("[AutoTrader] size=0 → 진입 취소")
             return result

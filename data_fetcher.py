@@ -50,7 +50,14 @@ def fetch_current_price(symbol: str) -> float:
         resp = _http.get(url, params={"symbol": symbol, "productType": "USDT-FUTURES"}, timeout=5)
         resp.raise_for_status()
         data = resp.json()
-        price = data.get("data", {}).get("lastPr") or data.get("data", [{}])[0].get("lastPr") if isinstance(data.get("data"), list) else data.get("data", {}).get("lastPr")
+        # data 가 list 또는 dict 둘 다 가능 — 명시적으로 분기.
+        # 기존 한 줄 식은 연산자 우선순위 때문에 dict 응답 시 항상 None 이었음.
+        d = data.get("data")
+        price = None
+        if isinstance(d, list) and d:
+            price = (d[0] or {}).get("lastPr")
+        elif isinstance(d, dict):
+            price = d.get("lastPr")
         if price:
             return float(price)
     except Exception:
@@ -96,9 +103,17 @@ def fetch_high_low_since(symbol: str, since_ts: str) -> dict:
 
     try:
         df = fetch_ohlcv(symbol, interval, limit)
-        # since 이후 캔들만 필터
-        since_naive = since.replace(tzinfo=None)
-        df_since = df[df.index >= since_naive]
+        # df.index 가 tz-aware 인지 naive 인지 확인 후 since 를 같은 형태로 맞춤
+        # (pandas 버전이나 fetch_ohlcv 변경 시 tz 가 붙을 수 있음)
+        idx_is_tz_aware = (
+            isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None
+        )
+        if idx_is_tz_aware:
+            since_aligned = since.astimezone(_dt.timezone.utc)
+        else:
+            since_aligned = since.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+
+        df_since = df[df.index >= since_aligned]
         if df_since.empty:
             df_since = df
 

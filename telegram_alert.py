@@ -10,9 +10,11 @@ def send(m):
     if not _T or not _C:
         return
     try:
+        # parse_mode 제거 — 메시지에 < 들어가면 HTML 파싱 실패로 전송 자체가 실패함.
+        # 일반 텍스트로 보내면 어떤 문자가 들어와도 안전.
         requests.post(
             f"https://api.telegram.org/bot{_T}/sendMessage",
-            json={"chat_id": _C, "text": m, "parse_mode": "HTML"},
+            json={"chat_id": _C, "text": m},
             timeout=5
         )
     except:
@@ -37,9 +39,15 @@ def alert_trade(r):
     )
 
 def alert_trade_rejected(r):
-    """진입 거부 알림 — R:R 미달 / SL 없음 / 확신도 미달."""
+    """진입 거부 알림 — R:R 미달 / SL 없음 / 확신도 미달 / TP 미설정 / 사이즈 0."""
     reason = r.get("reason", "")
-    _reject_keywords = ("R:R", "SL 미설정", "확신도", "중복 방지")
+    # 새 거부 사유들도 잡도록 키워드 확장
+    _reject_keywords = (
+        "R:R", "SL 미설정", "확신도", "중복 방지",
+        "TP 미설정",   # 자동 TP 보정 비활성 + AI 가 TP 안 줄 때
+        "사이즈 0",    # 잔고 부족 또는 거래소 최소 단위 미만
+        "최소 단위",   # 보강 키워드
+    )
     if not any(kw in reason for kw in _reject_keywords):
         return
     signal = r.get("signal", "")
