@@ -49,12 +49,37 @@ RISK_MAX_OUTPUT_TOKENS = int(os.getenv("RISK_MAX_OUTPUT_TOKENS", "1000"))
 
 
 # 발언 순서 — Aggressive 가 먼저 치고 나가면 Conservative/Neutral 이 반박/중재하는 구조.
+# 단, 마지막 발언자가 final analyst 의 종합에 더 큰 영향을 주므로 (recency bias 회피)
+# 라운드마다 순환시킴 — _resolve_speaking_order 가 처리.
 SPEAKING_ORDER = ("aggressive", "conservative", "neutral")
 SIDE_META = {
     "aggressive":    ("Aggressive", "⚔️", AGGRESSIVE_SYSTEM),
     "conservative":  ("Conservative", "🛡️", CONSERVATIVE_SYSTEM),
     "neutral":       ("Neutral", "⚖️", NEUTRAL_SYSTEM),
 }
+
+
+def _resolve_speaking_order(round_index: int, judge_verdict: str = "") -> tuple[str, ...]:
+    """라운드별 발언 순서를 결정.
+
+    - 1라운드: 시그널 방향과 반대편이 마지막 발언 (최종 결정에 가장 영향력 있음).
+      Bull 우위면 Conservative 가 마지막 (낙관 견제), Bear 우위면 Aggressive 가
+      마지막 (비관 견제), 중립이면 기본 순서.
+    - 2라운드 이후: 라운드 번호로 순환 (recency bias 분산).
+    """
+    base = ("aggressive", "conservative", "neutral")
+    if round_index == 0:
+        if "상방" in judge_verdict:
+            # Bull 우위 → Conservative 가 마지막에 견제
+            return ("aggressive", "neutral", "conservative")
+        elif "하방" in judge_verdict:
+            # Bear 우위 → Aggressive 가 마지막에 견제
+            return ("conservative", "neutral", "aggressive")
+        else:
+            return base
+    # 2라운드 이후: 회전
+    rotation = round_index % 3
+    return base[rotation:] + base[:rotation]
 
 
 @dataclass
@@ -221,6 +246,15 @@ def run_risk_triad(
     if not CLAUDE_API_KEY:
         return RiskTriadResult(enabled=False, rounds=0, error="CLAUDE_API_KEY 미설정")
 
+    # judge_block 에서 판정 결과 추출 (발언 순서 결정용)
+    # 형식: "...판정: 상방 우위..." 또는 "판정: 하방 우위" 또는 "판정: 중립"
+    judge_verdict = ""
+    if judge_block:
+        import re as _re
+        m = _re.search(r"판정\s*[:：]\s*(상방 우위|하방 우위|중립)", judge_block)
+        if m:
+            judge_verdict = m.group(1)
+
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
     result = RiskTriadResult(enabled=True, rounds=rounds)
 
@@ -262,7 +296,8 @@ def run_risk_triad(
 
     try:
         for r in range(rounds):
-            for side in SPEAKING_ORDER:
+            speaking_order = _resolve_speaking_order(r, judge_verdict)
+            for side in speaking_order:
                 label, icon, system_prompt = SIDE_META[side]
 
                 if progress_cb:
