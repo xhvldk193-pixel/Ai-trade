@@ -17,7 +17,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -141,8 +141,8 @@ class FinancialSituationMemory:
         advice: str,
         outcome: str = "",
         meta: Optional[dict] = None,
-        dedup_threshold: float = 0.0,
-        dedup_window: int = 2,
+        dedup_threshold: float = 0.85,
+        dedup_window: int = 3,
     ) -> Optional[MemoryRecord]:
         """
         이번 판단을 메모리에 추가한다.
@@ -153,7 +153,9 @@ class FinancialSituationMemory:
           건너뛴 경우 반환값은 None.
 
           BTC 분석처럼 지표가 비슷한 상황이 반복될 때 0.92는 너무 엄격해서
-          대부분이 dedup 처리됨 → 0.70 / window=2 로 완화.
+          대부분이 dedup 처리됨 → 0.85 / window=3 으로 완화.
+          기본값을 0 (off) 에서 0.85 (on) 로 변경 — 메모리 무한 누적 방지.
+          호출처에서 명시적으로 0 을 주면 dedup 비활성화 가능.
         """
         new_tokens = _tokenize(situation)
         with self._lock:
@@ -165,7 +167,8 @@ class FinancialSituationMemory:
                     return None
 
             rec = MemoryRecord(
-                timestamp=datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                # tz-aware UTC ISO8601 (Z 표기) — datetime.utcnow() 는 deprecated
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 situation=situation.strip(),
                 advice=advice.strip(),
                 outcome=outcome.strip(),

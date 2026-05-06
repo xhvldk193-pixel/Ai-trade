@@ -31,7 +31,9 @@ except Exception:
 
 # ── 설정 ──────────────────────────────────────────
 # 토론 에이전트 모델. 필요 시 env 로 오버라이드.
-DEBATE_MODEL = os.getenv("DEBATE_MODEL", "claude-haiku-4-5-20251001")
+# 기존 Haiku → Sonnet 격상: Bull/Bear 의 논리 정합성이 진입 거부/허가의
+# 실질적 근거이므로 모델 품질이 R:R 향상에 직결됨.
+DEBATE_MODEL = os.getenv("DEBATE_MODEL", "claude-sonnet-4-6")
 
 # 한 라운드 = Bull 1회 + Bear 1회.
 # max_rounds=1 → 총 2회 LLM 호출 (가장 가벼운 조합).
