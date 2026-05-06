@@ -93,17 +93,37 @@ class RiskTriadResult:
 ProgressCallback = Callable[[str, str], None]
 
 
-def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
-    """Risk 에이전트 단일 호출. 429/529 백오프 포함."""
+def _call_llm(
+    client: anthropic.Anthropic,
+    system: str,
+    cacheable_user: str,
+    variable_user: str = "",
+) -> str:
+    """Risk 에이전트 단일 호출. 429/529 백오프 포함.
+
+    prompt caching: cacheable_user (시장 요약 + Bull/Bear final + Judge) 는
+    Risk 3턴 동안 동일하므로 cache_control 마크 → 첫 턴은 write, 이후 2턴은 read.
+    variable_user (opponent_block, past_memories) 만 턴마다 변경.
+    """
     max_retries = 3
     wait = 8
+    content_blocks: list[dict] = [
+        {
+            "type": "text",
+            "text": cacheable_user,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    if variable_user:
+        content_blocks.append({"type": "text", "text": variable_user})
+
     for attempt in range(max_retries):
         try:
             msg = client.messages.create(
                 model=RISK_MODEL,
                 max_tokens=RISK_MAX_OUTPUT_TOKENS,
                 system=system,
-                messages=[{"role": "user", "content": user}],
+                messages=[{"role": "user", "content": content_blocks}],
             )
             if not hasattr(msg, "content") or not isinstance(msg.content, list):
                 raise RuntimeError(
@@ -222,6 +242,24 @@ def run_risk_triad(
     _context_summary   = _make_context_summary(context_blob)
     _account_risk_block = _make_account_risk_block(context_blob)
 
+    # prompt caching prefix: pair_label + context_summary + account_risk + Bull/Bear/Judge.
+    # 3턴 동안 동일하므로 첫 턴은 cache write (1.25x), 이후 2턴은 cache read (0.1x) → 큰 절감.
+    cacheable_user = (
+        f"{pair_label} 리스크 토론 — 시장 요약 + 사전 Bull/Bear 토론입니다.\n\n"
+        f"[시장 핵심 요약]\n{_context_summary}\n\n"
+        + (
+            f"{_account_risk_block}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            if _account_risk_block else ""
+        )
+        + f"[Bull 의 주장]\n{bull_final or '(직전 Bull 의견 없음)'}\n\n"
+        + f"[Bear 의 주장]\n{bear_final or '(직전 Bear 의견 없음)'}\n"
+        + (
+            f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{judge_block}\n"
+            if judge_block else ""
+        )
+        + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
     try:
         for r in range(rounds):
             for side in SPEAKING_ORDER:
@@ -233,7 +271,7 @@ def run_risk_triad(
                         f"{label} 라운드 {r + 1}/{rounds} 분석 중",
                     )
 
-                opponent_block = risk_opponent_block(
+                opponent_block_text = risk_opponent_block(
                     aggressive_last=last["aggressive"],
                     conservative_last=last["conservative"],
                     neutral_last=last["neutral"],
@@ -254,29 +292,21 @@ def run_risk_triad(
                     else "당신의 관점을 선제적으로 펼치세요."
                 )
 
-                user_prompt = RISK_USER_TEMPLATE.format(
-                    pair_label=pair_label,
-                    context_summary=_context_summary,
-                    account_risk_block=(
-                        f"{_account_risk_block}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                        if _account_risk_block else ""
-                    ),
-                    bull_final=bull_final or "(직전 Bull 의견 없음)",
-                    bear_final=bear_final or "(직전 Bear 의견 없음)",
-                    judge_block=(
-                        f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{judge_block}\n"
-                        if judge_block else ""
-                    ),
-                    opponent_block=opponent_block,
-                    past_memories_block=(
+                # 가변부: opponent_block + past_memories + instruction
+                variable_user = (
+                    f"{opponent_block_text}\n"
+                    + (
                         f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{past}\n"
                         if past else ""
-                    ),
-                    rebuttal_instruction=rebuttal_instruction,
+                    )
+                    + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    + "위 정보를 바탕으로 당신의 리스크 관점을 펼치세요.\n"
+                    + "계좌 정보(잔고·배분·레버리지)를 반드시 고려해 사이즈·손익비 판단을 구체화하세요.\n"
+                    + rebuttal_instruction
                 )
 
                 t0 = time.time()
-                reply = _call_llm(client, system_prompt, user_prompt)
+                reply = _call_llm(client, system_prompt, cacheable_user, variable_user)
                 elapsed = time.time() - t0
 
                 result.turns.append(RiskTurn(

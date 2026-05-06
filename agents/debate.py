@@ -84,17 +84,39 @@ ProgressCallback = Callable[[str, str], None]
 # progress_cb(phase, detail) — 예: ("bull_round_1", "Bull 라운드 1/1 시작")
 
 
-def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
-    """단일 에이전트 호출. 429/529 백오프 포함."""
+def _call_llm(
+    client: anthropic.Anthropic,
+    system: str,
+    cacheable_user: str,
+    variable_user: str = "",
+) -> str:
+    """단일 에이전트 호출. 429/529 백오프 포함.
+
+    prompt caching:
+      cacheable_user (공통 prefix — context_blob 등) 에 cache_control 마크.
+      variable_user (가변부 — opponent_block, past_memories, instruction) 는 뒤에 붙임.
+      → 같은 분석 사이클(5분 TTL) 내 Bull/Bear/Judge/Risk 호출 간 prefix 재사용 → 90% 절감.
+    """
     max_retries = 3
     wait = 8
+    # variable 부분이 비어 있어도 빈 블록은 추가 안 함 (일부 SDK 가 거부)
+    content_blocks: list[dict] = [
+        {
+            "type": "text",
+            "text": cacheable_user,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    if variable_user:
+        content_blocks.append({"type": "text", "text": variable_user})
+
     for attempt in range(max_retries):
         try:
             msg = client.messages.create(
                 model=DEBATE_MODEL,
                 max_tokens=DEBATE_MAX_OUTPUT_TOKENS,
                 system=system,
-                messages=[{"role": "user", "content": user}],
+                messages=[{"role": "user", "content": content_blocks}],
             )
             if not hasattr(msg, "content") or not isinstance(msg.content, list):
                 raise RuntimeError(
@@ -174,22 +196,29 @@ def run_bull_bear_debate(
             if r == 0 and agent_memories is not None:
                 bull_past = agent_memories.recall("bull", _query, top_k=2)
 
-            bull_user = BULL_USER_TEMPLATE.format(
-                pair_label=pair_label,
-                context_blob=context_blob,
-                opponent_block=opponent_block("bull", last_bear),
-                past_memories_block=(
+            # prompt caching: 공통 prefix (pair_label + context_blob) 와
+            # 가변부 (opponent / past_memories / instruction) 분리.
+            # 같은 prefix 가 Bear/Judge/Risk 호출에서도 재사용되어 90% 절감.
+            bull_cacheable = (
+                f"{pair_label} 현재 데이터입니다.\n\n"
+                f"{context_blob}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            bull_variable = (
+                f"{opponent_block('bull', last_bear)}\n"
+                + (
                     f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{bull_past}\n"
                     if bull_past else ""
-                ),
-                rebuttal_instruction=(
+                )
+                + "위 데이터를 근거로 상방 시나리오를 논증하세요.\n"
+                + (
                     "Bear 의 반박 포인트를 하나씩 짚어 재반박하세요."
                     if last_bear
                     else "Bear 가 제기할 가장 강한 반박을 선제적으로 무력화하세요."
-                ),
+                )
             )
             t0 = time.time()
-            bull_reply = _call_llm(client, BULL_SYSTEM, bull_user)
+            bull_reply = _call_llm(client, BULL_SYSTEM, bull_cacheable, bull_variable)
             elapsed = time.time() - t0
             result.turns.append(DebateTurn(
                 side="bull",
@@ -208,20 +237,22 @@ def run_bull_bear_debate(
             if r == 0 and agent_memories is not None:
                 bear_past = agent_memories.recall("bear", _query, top_k=2)
 
-            bear_user = BEAR_USER_TEMPLATE.format(
-                pair_label=pair_label,
-                context_blob=context_blob,
-                opponent_block=opponent_block("bear", last_bull),
-                past_memories_block=(
+            bear_cacheable = (
+                f"{pair_label} 현재 데이터입니다.\n\n"
+                f"{context_blob}\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            bear_variable = (
+                f"{opponent_block('bear', last_bull)}\n"
+                + (
                     f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{bear_past}\n"
                     if bear_past else ""
-                ),
-                rebuttal_instruction=(
-                    "Bull 의 근거 하나하나를 구체적으로 반박하세요."
-                ),
+                )
+                + "위 데이터를 근거로 하방 시나리오를 논증하세요.\n"
+                + "Bull 의 근거 하나하나를 구체적으로 반박하세요."
             )
             t0 = time.time()
-            bear_reply = _call_llm(client, BEAR_SYSTEM, bear_user)
+            bear_reply = _call_llm(client, BEAR_SYSTEM, bear_cacheable, bear_variable)
             elapsed = time.time() - t0
             result.turns.append(DebateTurn(
                 side="bear",

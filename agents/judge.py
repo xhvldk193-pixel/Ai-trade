@@ -120,16 +120,32 @@ def _parse_judge_output(text: str) -> dict:
     return result
 
 
-def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
+def _call_llm(
+    client: anthropic.Anthropic,
+    system: str,
+    cacheable_user: str,
+    variable_user: str = "",
+) -> str:
+    """Judge LLM 호출. cacheable_user 에 cache_control 적용."""
     max_retries = 3
     wait = 8
+    content_blocks: list[dict] = [
+        {
+            "type": "text",
+            "text": cacheable_user,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    if variable_user:
+        content_blocks.append({"type": "text", "text": variable_user})
+
     for attempt in range(max_retries):
         try:
             msg = client.messages.create(
                 model=JUDGE_MODEL,
                 max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
                 system=system,
-                messages=[{"role": "user", "content": user}],
+                messages=[{"role": "user", "content": content_blocks}],
             )
             if not hasattr(msg, "content") or not isinstance(msg.content, list):
                 raise RuntimeError(
@@ -224,21 +240,31 @@ def run_judge(
     # context_blob 전체 대신 핵심 요약만 주입 (토큰 절약 + 집중도 향상)
     context_summary = _make_context_summary(context_blob)
 
-    user_prompt = JUDGE_USER_TEMPLATE.format(
-        pair_label=pair_label,
-        context_summary=context_summary,
-        bull_final=bull_final or "(Bull 발언 없음)",
-        bear_final=bear_final or "(Bear 발언 없음)",
-        past_memories_block=(
+    # prompt caching: pair_label + context_summary 를 prefix 로.
+    # judge 는 분석당 1회 호출이라 자체 재사용은 없지만, 같은 분석 사이클 안에서
+    # Bull/Bear 가 본 비슷한 prefix 가 캐시 코퍼스에 이미 있을 수 있어 부분 hit 가능.
+    cacheable_user = (
+        f"{pair_label} Bull/Bear 토론 판정 요청입니다.\n\n"
+        f"[시장 핵심 요약]\n{context_summary}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    variable_user = (
+        f"[Bull Researcher 최종 발언]\n{bull_final or '(Bull 발언 없음)'}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"[Bear Researcher 최종 발언]\n{bear_final or '(Bear 발언 없음)'}\n"
+        + (
             f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n{past}\n"
             if past else ""
-        ),
+        )
+        + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        + "위 발언의 논리 강도를 공정하게 비교 판정하세요. "
+        + "전체 시황은 Bull/Bear가 이미 요약했으므로 그들의 주장에 집중하세요."
     )
 
     client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
     t0 = time.time()
     try:
-        raw = _call_llm(client, JUDGE_SYSTEM, user_prompt)
+        raw = _call_llm(client, JUDGE_SYSTEM, cacheable_user, variable_user)
     except Exception as exc:
         return JudgeResult(
             enabled=True, verdict="중립", reasoning="", bull_key="", bear_key="",
