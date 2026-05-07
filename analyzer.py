@@ -688,7 +688,9 @@ def analyze_with_claude(
       2) debate   (Phase 1 단독 블록, 하위 호환)
       3) 없음
     """
-    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    # 분석 1회당 여러 에이전트가 같은 클라이언트를 공유 — connection pool 재사용.
+    from agents import get_anthropic_client
+    client = get_anthropic_client()
 
     if pipeline is not None and pipeline.combined_block:
         debate_block = pipeline.combined_block

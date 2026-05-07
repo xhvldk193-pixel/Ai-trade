@@ -17,7 +17,7 @@ def send(m):
             json={"chat_id": _C, "text": m},
             timeout=5
         )
-    except:
+    except Exception:
         pass
 
 def alert_trade(r):

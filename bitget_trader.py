@@ -267,7 +267,7 @@ class BitgetClient:
                     json={"chat_id": c, "text": msg},
                     timeout=5
                 )
-            except:
+            except Exception:
                 pass
 
 
@@ -396,7 +396,8 @@ class BitgetAutoTrader:
         if current and current != desired:
             log.info("[AutoTrader] 반대 포지션(%s) 청산", current)
             try: self.client.cancel_all_tpsl(self.symbol)
-            except: pass
+            except Exception:
+                pass
             self.client.close_all(self.symbol)
             time.sleep(0.8)
 
@@ -525,7 +526,7 @@ class BitgetAutoTrader:
                     json={"chat_id": c, "text": msg},
                     timeout=5
                 )
-            except:
+            except Exception:
                 pass
 
     def last_result(self):   return dict(self._last)
@@ -533,5 +534,6 @@ class BitgetAutoTrader:
     def get_account(self):   return self.client.get_account(self.symbol)
     def close_all(self):
         try: self.client.cancel_all_tpsl(self.symbol)
-        except: pass
+        except Exception:
+            pass
         return self.client.close_all(self.symbol)

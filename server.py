@@ -26,8 +26,10 @@ import os as _os, requests as _req
 def _tg(msg):
     t=_os.environ.get("TELEGRAM_BOT_TOKEN","");c=_os.environ.get("TELEGRAM_CHAT_ID","")
     if t and c:
-        try:_req.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":msg,"parse_mode":"HTML"},timeout=5)
-        except:pass
+        # parse_mode 제거 — 메시지에 < 들어가면 HTML 파싱 실패로 전송 자체가 실패함
+        try:_req.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":msg},timeout=5)
+        except Exception:
+            pass
 
 import config as runtime_config
 from config import (
@@ -113,7 +115,9 @@ app = FastAPI()
 # ── 2단계 인증 ────────────────────────────
 import secrets
 _pending_codes = {}  # {code: expire_time}
-_auth_sessions = set()
+# 세션 토큰 저장: {token: expire_ts}  — 평문이지만 만료 검증으로 7일 무한 도용 방지
+_auth_sessions: dict[str, float] = {}
+_AUTH_SESSION_TTL = 86400 * 7  # 7일
 
 def _gen_code() -> str:
     return str(random.randint(100000, 999999))
@@ -123,7 +127,21 @@ def _send_auth_code(code: str):
     t=_os2.environ.get("TELEGRAM_BOT_TOKEN","");c=_os2.environ.get("TELEGRAM_CHAT_ID","")
     if t and c:
         try:_req2.post(f"https://api.telegram.org/bot{t}/sendMessage",json={"chat_id":c,"text":f"🔐 로그인 인증코드: {code}\n5분 내 입력하세요."},timeout=5)
-        except:pass
+        except Exception:
+            pass
+
+def _is_session_valid(token: str) -> bool:
+    """세션 토큰이 존재하고 만료되지 않았는지 검증."""
+    if not token:
+        return False
+    expire_ts = _auth_sessions.get(token)
+    if expire_ts is None:
+        return False
+    if expire_ts < time.time():
+        # 만료된 세션 즉시 폐기
+        _auth_sessions.pop(token, None)
+        return False
+    return True
 
 @app.middleware("http")
 async def auth_middleware(request, call_next):
@@ -131,17 +149,17 @@ async def auth_middleware(request, call_next):
     # 정적 파일, 인증 엔드포인트는 통과
     if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol", "/api/memory/reset"):
         return await call_next(request)
-    
-    # 세션 토큰 확인
+
+    # 세션 토큰 확인 (만료 검증 포함)
     token = request.cookies.get("session_token")
-    if token and token in _auth_sessions:
+    if _is_session_valid(token):
         return await call_next(request)
-    
+
     # 미인증 → 로그인 페이지
     if path == "/" or not path.startswith("/api"):
         from fastapi.responses import HTMLResponse
         return HTMLResponse(_login_html())
-    
+
     from fastapi.responses import JSONResponse
     return JSONResponse({"error": "unauthorized"}, status_code=401)
 
@@ -154,48 +172,52 @@ async def auth_login(request: Request):
         return {"ok": False, "error": "비밀번호 오류"}
     code = _gen_code()
     expire = time.time() + 300  # 5분
-    _pending_codes[code] = expire
+    # 신 포맷: brute force 방어를 위한 attempts 카운터 포함
+    _pending_codes[code] = {"expire": expire, "attempts": 0}
     _send_auth_code(code)
     return {"ok": True}
-
-_auth_attempts: dict = {}  # IP별 시도 횟수 추적
 
 @app.post("/auth/verify")
 async def auth_verify(request: Request):
     body = await request.json()
     code = body.get("code", "")
     now = time.time()
-
-    # 브루트포스 보호 — IP당 5분간 5회 제한
-    client_ip = request.client.host if request.client else "unknown"
-    _auth_attempts.setdefault(client_ip, [])
-    # 5분 지난 시도 제거
-    _auth_attempts[client_ip] = [t for t in _auth_attempts[client_ip] if now - t < 300]
-    if len(_auth_attempts[client_ip]) >= 5:
-        return {"ok": False, "error": "시도 횟수 초과. 5분 후 재시도하세요."}
-    _auth_attempts[client_ip].append(now)
-
     # 만료 코드 정리
-    expired = [k for k, v in _pending_codes.items() if v < now]
+    expired = [k for k, v in _pending_codes.items() if (v["expire"] if isinstance(v, dict) else v) < now]
     for k in expired: del _pending_codes[k]
 
     if code in _pending_codes:
-        del _pending_codes[code]
-        # 성공 시 시도 기록 초기화
-        _auth_attempts[client_ip] = []
+        info = _pending_codes[code]
+        # 구 포맷(epoch float) 호환 — 신 포맷은 dict
+        if not isinstance(info, dict):
+            info = {"expire": info, "attempts": 0}
+            _pending_codes[code] = info
+        info["attempts"] = info.get("attempts", 0) + 1
+        if info["attempts"] > 3:
+            # brute force 차단 — 3회 실패 시 코드 폐기
+            del _pending_codes[code]
+            return {"ok": False, "error": "시도 횟수 초과 — 다시 로그인하세요."}
+        del _pending_codes[code]  # 정상 검증도 즉시 폐기 (one-time)
         token = secrets.token_hex(32)
-        _auth_sessions.add(token)
+        _auth_sessions[token] = now + _AUTH_SESSION_TTL
         _save_auth_sessions()
         from fastapi.responses import JSONResponse
         resp = JSONResponse({"ok": True})
-        resp.set_cookie("session_token", token, httponly=True, max_age=86400*7, samesite="lax")
+        # 쿠키 보안 옵션 — samesite=lax 로 CSRF 방어, secure 는 HTTPS 환경에서만
+        resp.set_cookie(
+            "session_token", token,
+            httponly=True,
+            samesite="lax",
+            secure=os.environ.get("HTTPS_ONLY", "false").lower() == "true",
+            max_age=_AUTH_SESSION_TTL,
+        )
         return resp
     return {"ok": False, "error": "코드 오류 또는 만료"}
 
 @app.get("/auth/check")
 async def auth_check(request: Request):
     token = request.cookies.get("session_token")
-    return {"ok": bool(token and token in _auth_sessions)}
+    return {"ok": _is_session_valid(token)}
 
 def _login_html():
     return """<!DOCTYPE html>
@@ -304,14 +326,35 @@ def _load_auth_sessions():
         if os.path.exists(_AUTH_SESSIONS_PATH):
             with open(_AUTH_SESSIONS_PATH) as f:
                 data = json.load(f)
-            _auth_sessions.update(data.get("sessions", []))
-    except: pass
+            now = time.time()
+            # 신 포맷: {"sessions": {token: expire_ts, ...}}
+            sessions_obj = data.get("sessions", {})
+            if isinstance(sessions_obj, dict):
+                for tok, exp in sessions_obj.items():
+                    try:
+                        exp_f = float(exp)
+                        if exp_f > now:
+                            _auth_sessions[tok] = exp_f
+                    except (TypeError, ValueError):
+                        continue
+            elif isinstance(sessions_obj, list):
+                # 구 포맷 호환: [token, ...] — 모두 7일 기준 만료 부여
+                for tok in sessions_obj:
+                    if isinstance(tok, str):
+                        _auth_sessions[tok] = now + _AUTH_SESSION_TTL
+    except Exception:
+        pass
 
 def _save_auth_sessions():
     try:
         os.makedirs(os.path.dirname(_AUTH_SESSIONS_PATH), exist_ok=True)
-        json.dump({"sessions": list(_auth_sessions)}, open(_AUTH_SESSIONS_PATH, "w"))
-    except: pass
+        # 만료된 토큰은 저장 안 함 (디스크 무한 누적 방지)
+        now = time.time()
+        valid = {tok: exp for tok, exp in _auth_sessions.items() if exp > now}
+        with open(_AUTH_SESSIONS_PATH, "w") as f:
+            json.dump({"sessions": valid}, f)
+    except Exception:
+        pass
 
 LATEST_ANALYSIS_PATH   = os.path.join(BASE_DIR, "data", "latest_analysis.json")
 ANALYSIS_HISTORY_PATH  = os.path.join(BASE_DIR, "data", "analysis_history.jsonl")
@@ -787,24 +830,32 @@ class MarketStreamManager:
         return tf_data, price
 
     async def _run_forever(self):
+        # 지수 백오프 — 고정 3초 였던 기존 구현은 Binance 다운 시 IP 차단 위험.
+        # 실패 시 backoff *= 2, 성공 시 리셋. 최대 60초 cap.
+        bootstrap_backoff = 5
+        ws_backoff = 3
         while not self._stopped:
             if not self._ready.is_set():
                 try:
                     await self._bootstrap()
+                    bootstrap_backoff = 5  # 성공 시 리셋
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    print(f"[market-stream] bootstrap failed: {exc} — 5초 후 재시도")
-                    await asyncio.sleep(5)
+                    print(f"[market-stream] bootstrap failed: {exc} — {bootstrap_backoff}초 후 재시도")
+                    await asyncio.sleep(min(bootstrap_backoff, 60))
+                    bootstrap_backoff = min(bootstrap_backoff * 2, 60)
                     continue
 
             try:
                 await self._consume_stream()
+                ws_backoff = 3  # 성공 종료 시 리셋
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                print(f"[market-stream] websocket disconnected: {exc}")
-                await asyncio.sleep(3)
+                print(f"[market-stream] websocket disconnected: {exc} — {ws_backoff}초 후 재연결")
+                await asyncio.sleep(min(ws_backoff, 60))
+                ws_backoff = min(ws_backoff * 2, 60)
 
     async def _bootstrap(self):
         """REST API로 초기 데이터 로드. 실패해도 WebSocket 기동은 계속한다."""
@@ -1229,15 +1280,20 @@ class AccountStreamManager:
             return copy.deepcopy(self._payload or {})
 
     async def _run_forever(self):
+        # 지수 백오프 — Binance 다운 시 IP 차단 방지.
+        bootstrap_backoff = 5
+        ws_backoff = 3
         while not self._stopped:
             if not self._ready.is_set():
                 try:
                     await self._refresh_payload(delay=0, broadcast=False)
+                    bootstrap_backoff = 5
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    print(f"[account-stream] bootstrap failed: {exc}")
-                    await asyncio.sleep(5)
+                    print(f"[account-stream] bootstrap failed: {exc} — {bootstrap_backoff}초 후 재시도")
+                    await asyncio.sleep(min(bootstrap_backoff, 60))
+                    bootstrap_backoff = min(bootstrap_backoff * 2, 60)
                     continue
 
             if not runtime_config.BINANCE_API_KEY:
@@ -1246,6 +1302,7 @@ class AccountStreamManager:
 
             try:
                 await self._consume_stream()
+                ws_backoff = 3
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1256,11 +1313,12 @@ class AccountStreamManager:
                         await self._refresh_payload(delay=0, broadcast=True)
                     await asyncio.sleep(10)
                 else:
-                    print(f"[account-stream] websocket disconnected: {exc}")
+                    print(f"[account-stream] websocket disconnected: {exc} — {ws_backoff}초 후 재연결")
                     # 재연결 전 REST 스냅샷 갱신 — 끊긴 동안의 변경사항 반영
                     with contextlib.suppress(Exception):
                         await self._refresh_payload(delay=0, broadcast=True)
-                    await asyncio.sleep(3)
+                    await asyncio.sleep(min(ws_backoff, 60))
+                    ws_backoff = min(ws_backoff * 2, 60)
 
     async def _periodic_refresh(self):
         """WebSocket 이벤트 여부와 무관하게 주기적으로 REST 스냅샷을 갱신."""
@@ -1643,7 +1701,11 @@ class AnalysisManager:
                             snap_path = os.path.join(BASE_DIR, "data", "trade_snapshots.jsonl")
                             acct = await asyncio.to_thread(_auto_trader.get_account)
                             equity = float(acct.get("equity", 0) or 0)
-                            lines = open(snap_path).readlines() if os.path.exists(snap_path) else []
+                            if os.path.exists(snap_path):
+                                with open(snap_path) as f:
+                                    lines = f.readlines()
+                            else:
+                                lines = []
                             if lines:
                                 last = json.loads(lines[-1])
                                 if not last.get("closed"):
@@ -1654,13 +1716,14 @@ class AnalysisManager:
                                     close_price = float(acct.get("markPrice", 0) or 0)
                                     last["result_pct"] = round((equity - float(last.get("equity_at_entry", equity))) / max(equity, 1) * 100, 2)
                                     lines[-1] = json.dumps(last, ensure_ascii=False) + "\n"
-                                    open(snap_path, "w").writelines(lines)
-                        except:
+                                    with open(snap_path, "w") as f:
+                                        f.writelines(lines)
+                        except Exception:
                             pass
                         _tg("🔄 포지션 청산 감지 → 리플렉션 실행 중...")
                         asyncio.create_task(_run_reflection())
                     _prev_position_side = _cur_side
-                except:
+                except Exception:
                     pass
 
             # ── 포지션 있으면 분석 스킵 ──────
@@ -1669,14 +1732,14 @@ class AnalysisManager:
                     _cur_pos = await asyncio.to_thread(_auto_trader.get_positions)
                     if _cur_pos:
                         return
-                except:
+                except Exception:
                     pass
 
             # ── 미체결 주문 취소 (이전 지정가 주문 정리) ──────
             if _auto_trader:
                 try:
                     await asyncio.to_thread(_auto_trader.client.cancel_all_tpsl, _auto_trader.symbol)
-                except:
+                except Exception:
                     pass
 
             # ── Bitget 자동매매 실행 ──────────────────────────
@@ -1699,8 +1762,9 @@ class AnalysisManager:
                         new_tp = trade_levels.get("target")
                         for p in positions:
                             side = p.get("holdSide", "")
-                            entry = p.get("averageOpenPrice", 0)
-                            upnl = p.get("unrealizedPL", 0)
+                            # Bitget 가 string 으로 반환하는 경우 있음 — float 강제 변환
+                            entry = float(p.get("averageOpenPrice", 0) or 0)
+                            upnl  = float(p.get("unrealizedPL", 0) or 0)
                             emoji = "🟢" if upnl >= 0 else "🔴"
                             msg = f"📊 포지션 관리 알림\n{side.upper()} 진입가 ${entry:,.2f}\n미실현: {emoji}${upnl:+,.2f}\n"
                             if new_sl:
@@ -1708,7 +1772,7 @@ class AnalysisManager:
                             if new_tp:
                                 msg += f"AI 권고 익절: ${new_tp:,.2f}"
                             _tg(msg)
-                except:
+                except Exception:
                     pass
 
         except asyncio.CancelledError:
@@ -1734,7 +1798,7 @@ SCHEDULE_STATE_PATH = os.path.join(BASE_DIR, "data", "schedule_state.json")
 class ScheduleManager:
     """서버에서 30분마다 분석을 실행하는 백그라운드 스케줄러."""
 
-    INTERVAL_MIN = 240  # 4시간
+    INTERVAL_MIN = 120  # 2시간
 
     def __init__(self):
         self._enabled: bool = False
@@ -1859,15 +1923,18 @@ def _load_symbol():
         if os.path.exists(_SYMBOL_PATH):
             with open(_SYMBOL_PATH) as f:
                 _current_symbol = json.load(f).get("symbol", DEFAULT_SYMBOL)
-    except: pass
+    except Exception:
+        pass
 
 def _save_symbol(symbol: str):
     global _current_symbol
     _current_symbol = symbol
     try:
         os.makedirs(os.path.dirname(_SYMBOL_PATH), exist_ok=True)
-        json.dump({"symbol": symbol}, open(_SYMBOL_PATH, "w"))
-    except: pass
+        with open(_SYMBOL_PATH, "w") as f:
+            json.dump({"symbol": symbol}, f)
+    except Exception:
+        pass
 
 _load_symbol()
 _cached_account = {}
@@ -1893,7 +1960,8 @@ def _save_at_settings():
         os.makedirs(os.path.dirname(_AT_SETTINGS_PATH), exist_ok=True)
         cfg = _auto_trader
         s = {"enabled": _auto_trade_enabled, "usdt_per_trade": cfg.usdt_per_trade if cfg else AUTO_TRADE_USDT, "leverage": cfg.leverage if cfg else AUTO_TRADE_LEVERAGE, "min_confidence": cfg.min_confidence if cfg else AUTO_TRADE_MIN_CONF, "use_tp": cfg.use_tp if cfg else AUTO_TRADE_USE_TP, "use_sl": cfg.use_sl if cfg else AUTO_TRADE_USE_SL}
-        json.dump(s, open(_AT_SETTINGS_PATH, "w"))
+        with open(_AT_SETTINGS_PATH, "w") as f:
+            json.dump(s, f)
     except Exception as e:
         print("[auto-trade] 설정 저장 실패:", e)
 
@@ -1905,11 +1973,15 @@ _load_at_settings()
 # Routes
 # ══════════════════════════════════════════════
 async def _run_reflection():
-    """포지션 청산 시 리플렉션 실행."""
+    """포지션 청산 시 리플렉션 실행.
+
+    예전엔 http://localhost:8000/api/reflect 자기 자신 호출이었으나:
+    - PaaS 배포 환경(Railway/Render/Fly)에선 포트 8000 가정이 깨짐
+    - auth_middleware 가 /api/reflect 를 막아 401
+    → 함수 직접 호출이 모든 환경에서 안전.
+    """
     try:
-        import httpx
-        async with httpx.AsyncClient() as client:
-            await client.post("http://localhost:8000/api/reflect", timeout=120)
+        await _run_reflect_background()
     except Exception as e:
         _lg.getLogger("reflection").warning("리플렉션 실패: %s", e)
 
@@ -1931,6 +2003,10 @@ async def _reflection_loop():
 
 
 
+# JSONL 파일 동시 쓰기 보호용 Lock — to_thread 로 호출되는 동기 함수의
+# append 경합 방지. asyncio 환경이라도 같은 파일에 여러 태스크가 동시 진입 가능.
+_jsonl_write_lock = asyncio.Lock()
+
 async def _save_account_snapshot():
     """계좌 스냅샷을 account_history.jsonl에 저장."""
     try:
@@ -1950,8 +2026,9 @@ async def _save_account_snapshot():
         }
         history_path = os.path.join(BASE_DIR, "data", "account_history.jsonl")
         os.makedirs(os.path.dirname(history_path), exist_ok=True)
-        with open(history_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
+        async with _jsonl_write_lock:
+            with open(history_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(snapshot, ensure_ascii=False) + "\n")
     except Exception as e:
         print("[snapshot] 저장 실패:", e)
 
@@ -1966,14 +2043,11 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
     confidence = analysis.get("confidence", 0)
     trade_levels = analysis.get("trade_levels")
 
-    # AI 권장 레버리지는 로그만 기록 — UI 설정을 덮어쓰지 않음
-    import re as _re
-    summary = analysis.get("summary", "") or ""
-    lev_match = _re.search(r"레버리지[:\s]*(\d+)배|(\d+)배[:\s]*레버리지", summary)
-    if lev_match and _auto_trader:
-        ai_lev = int(lev_match.group(1) or lev_match.group(2))
-        if 1 <= ai_lev <= 20:
-            print(f"[AutoTrade] AI 권장 레버리지: {ai_lev}배 (현재 UI 설정: {_auto_trader.leverage}배 — 유지)")
+    # AI 권장 레버리지는 로그용 — 정확한 위치(claude_leverage)에서 읽음.
+    # 기존엔 summary(한줄요약)에서 정규식으로 찾으려 했으나 거기엔 거의 없는 죽은 코드.
+    ai_lev = analysis.get("claude_leverage")
+    if ai_lev and _auto_trader and 1 <= int(ai_lev) <= 20:
+        print(f"[AutoTrade] AI 권장 레버리지: {ai_lev}배 (현재 UI 설정: {_auto_trader.leverage}배 — 유지)")
 
     async with _auto_trade_lock:
         try:
@@ -2018,9 +2092,14 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                     f"R:R: {_rr if _rr else 'N/A'}\n"
                     f"분석요약: {str(analysis.get('summary',''))[:300]}"
                 )
+                # TP/SL 가 None 일 때 f-string 포맷 에러 방지 — N/A 로 폴백.
+                # 이게 있어야 진입은 성공했으나 메모리 기록이 깨져 reflection
+                # 자료가 사라지는 사고를 막을 수 있음.
+                _tp_str = f"${_tp:,.2f}" if _tp else "N/A"
+                _sl_str = f"${_sl:,.2f}" if _sl else "N/A"
                 _trade_advice = (
                     f"{_action.upper()} 진입 실행\n"
-                    f"진입가 ${_entry:,.2f} | TP ${_tp:,.2f} | SL ${_sl:,.2f}"
+                    f"진입가 ${_entry:,.2f} | TP {_tp_str} | SL {_sl_str}"
                 )
                 _trade_mem.add_situation(
                     situation=_trade_situation,
@@ -2063,7 +2142,7 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                 os.makedirs(os.path.dirname(snap_path), exist_ok=True)
                 with open(snap_path, "a") as f:
                     f.write(json.dumps(snap, ensure_ascii=False) + "\n")
-            except:
+            except Exception:
                 pass
 
         # 인메모리 로그 (최대 _TRADE_LOG_MAX 건)
@@ -2298,7 +2377,7 @@ async def debug_price():
     return {
         "price": price,
         "last_update": last_update,
-        "server_time": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "server_time": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "stream_ready": ready,
         "runner_task_alive": runner_alive,
         "price_tick_task_alive": tick_alive,
@@ -2383,13 +2462,14 @@ async def _run_reflect_background():
     try:
         snap_path = os.path.join(BASE_DIR, "data", "trade_snapshots.jsonl")
         if os.path.exists(snap_path):
-            lines = open(snap_path).readlines()
+            with open(snap_path) as f:
+                lines = f.readlines()
             for line in reversed(lines):
                 snap = json.loads(line)
                 if snap.get("closed") and snap.get("close_equity"):
                     # 실제 청산된 스냅샷이 있으면 현재가 대신 사용
                     break
-    except:
+    except Exception:
         pass
 
     now_utc = _dt.datetime.now(_dt.timezone.utc)
@@ -2581,7 +2661,7 @@ async def account_endpoint():
                 try:
                     margin = (total * entry) / float(lev) if float(str(lev)) > 0 else 0
                     pnl_r = (pnl / margin) if margin > 0 else 0
-                except:
+                except Exception:
                     pnl_r = 0
                 pos_list.append({
                     "symbol":        DEFAULT_SYMBOL,
@@ -2664,6 +2744,9 @@ class SetupSaveRequest(BaseModel):
     claude_api_key:     str = ""
     binance_api_key:    str = ""
     binance_secret_key: str = ""
+    bitget_api_key:     str = ""
+    bitget_secret_key:  str = ""
+    bitget_passphrase:  str = ""
 
 
 def _is_local_client(request: Request) -> bool:
@@ -2705,6 +2788,9 @@ async def setup_save(body: SetupSaveRequest, request: Request):
         "CLAUDE_API_KEY":     runtime_config.sanitize_env_value(body.claude_api_key),
         "BINANCE_API_KEY":    runtime_config.sanitize_env_value(body.binance_api_key),
         "BINANCE_SECRET_KEY": runtime_config.sanitize_env_value(body.binance_secret_key),
+        "BITGET_API_KEY":     runtime_config.sanitize_env_value(body.bitget_api_key),
+        "BITGET_SECRET_KEY":  runtime_config.sanitize_env_value(body.bitget_secret_key),
+        "BITGET_PASSPHRASE":  runtime_config.sanitize_env_value(body.bitget_passphrase),
     }
     for k, v in updates.items():
         if v:
@@ -2725,6 +2811,22 @@ async def setup_save(body: SetupSaveRequest, request: Request):
     # 계좌 스트림은 API 키를 사용하므로 저장 직후 재시작해 새 값을 즉시 반영
     await _account_stream.stop()
     await _account_stream.start()
+
+    # Bitget 키가 갱신되었을 수 있으므로 _auto_trader 재생성
+    # (기존엔 시작 시 한 번만 읽어서 키 변경이 영원히 반영 안 되는 버그 있었음)
+    global _auto_trader
+    try:
+        from config import (
+            BITGET_API_KEY as _new_bk,
+            BITGET_SECRET_KEY as _new_bs,
+            BITGET_PASSPHRASE as _new_bp,
+        )
+        if _new_bk and _new_bs and _new_bp:
+            _auto_trader = _make_auto_trader()
+            _load_at_settings()  # 저장된 사용자 설정 다시 적용
+            print("[setup] Bitget AutoTrader 재생성 완료", flush=True)
+    except Exception as _exc:
+        print(f"[setup] AutoTrader 재생성 실패: {_exc}", flush=True)
 
     return {"ok": True}
 
@@ -2778,7 +2880,7 @@ async def performance_endpoint(days: int = 30):
             daily_map[day_key]["trades"] += 1
             if profit > 0:
                 daily_map[day_key]["wins"] += 1
-        except:
+        except Exception:
             pass
 
     daily = []

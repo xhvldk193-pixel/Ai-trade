@@ -141,6 +141,16 @@ def _compute_stats(s: Optional[pd.Series], change_threshold: float = 0.05) -> di
 
 # ── yfinance helpers ─────────────────────────────────────────
 
+# 같은 티커를 분석마다 새로 받으면 Yahoo 가 가끔 느려져서 분석 전체가 멈춤.
+# 5분 TTL 인메모리 캐시 + stale-while-error: Yahoo 다운 시 옛날 데이터로라도 진행.
+import time as _time_module
+import threading as _threading
+_yf_cache: dict[str, tuple[float, Optional[pd.Series]]] = {}
+_yf_cache_lock = _threading.Lock()
+_YF_TTL = 300  # 5분
+_YF_TIMEOUT = 15  # 초
+
+
 def _extract_close(data) -> Optional[pd.Series]:
     """yfinance.download 결과에서 Close 시리즈를 안전하게 추출."""
     try:
@@ -157,20 +167,38 @@ def _extract_close(data) -> Optional[pd.Series]:
 
 
 def _yf_close_series(ticker: str, period: str = "60d") -> Optional[pd.Series]:
-    """yfinance로 단일 티커 종가 시계열 조회."""
+    """yfinance로 단일 티커 종가 시계열 조회.
+
+    캐싱: 같은 (ticker, period) 5분 내 호출은 메모리 캐시 반환.
+    stale-while-error: Yahoo 가 실패해도 옛날 캐시 값 있으면 그거 반환.
+    """
+    key = f"{ticker}:{period}"
+    now = _time_module.time()
+
+    # 캐시 hit
+    with _yf_cache_lock:
+        if key in _yf_cache:
+            ts, val = _yf_cache[key]
+            if now - ts < _YF_TTL:
+                return val
+
+    # 캐시 miss → 신규 다운로드
     try:
         import yfinance as yf
-        import concurrent.futures as _cf
-        def _dl():
-            return yf.download(
-                ticker, period=period, interval="1d",
-                progress=False, auto_adjust=True, threads=False,
-            )
-        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
-            future = ex.submit(_dl)
-            data = future.result(timeout=30)
-        return _extract_close(data)
+        data = yf.download(
+            ticker, period=period, interval="1d",
+            progress=False, auto_adjust=True, threads=False,
+            timeout=_YF_TIMEOUT,
+        )
+        result = _extract_close(data)
+        with _yf_cache_lock:
+            _yf_cache[key] = (now, result)
+        return result
     except Exception:
+        # 실패 시: 옛날 캐시라도 있으면 stale 데이터 반환 (분석 멈춤 방지)
+        with _yf_cache_lock:
+            if key in _yf_cache:
+                return _yf_cache[key][1]
         return None
 
 
@@ -228,7 +256,7 @@ def _fetch_credit_spread() -> Optional[pd.Series]:
         import yfinance as yf
         data = yf.download(
             ["HYG", "LQD"], period="90d", interval="1d",
-            progress=False, auto_adjust=True, threads=False,
+            progress=False, auto_adjust=True, threads=False, timeout=15,
         )
         close_df = data["Close"].dropna() if data is not None else None
         if close_df is None or close_df.empty:
@@ -266,7 +294,7 @@ def _fetch_btc_etf() -> dict:
         import yfinance as yf
         data = yf.download(
             "IBIT", period="60d", interval="1d",
-            progress=False, auto_adjust=True, threads=False,
+            progress=False, auto_adjust=True, threads=False, timeout=15,
         )
         if data is None or (hasattr(data, "empty") and data.empty):
             return out
@@ -319,7 +347,7 @@ def _fetch_traditional_markets() -> dict:
             interval="1d",
             progress=False,
             auto_adjust=True,
-            threads=False,
+            threads=False, timeout=15,
         )
 
         try:
