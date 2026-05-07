@@ -158,23 +158,37 @@ async def auth_login(request: Request):
     _send_auth_code(code)
     return {"ok": True}
 
+_auth_attempts: dict = {}  # IP별 시도 횟수 추적
+
 @app.post("/auth/verify")
 async def auth_verify(request: Request):
     body = await request.json()
     code = body.get("code", "")
     now = time.time()
+
+    # 브루트포스 보호 — IP당 5분간 5회 제한
+    client_ip = request.client.host if request.client else "unknown"
+    _auth_attempts.setdefault(client_ip, [])
+    # 5분 지난 시도 제거
+    _auth_attempts[client_ip] = [t for t in _auth_attempts[client_ip] if now - t < 300]
+    if len(_auth_attempts[client_ip]) >= 5:
+        return {"ok": False, "error": "시도 횟수 초과. 5분 후 재시도하세요."}
+    _auth_attempts[client_ip].append(now)
+
     # 만료 코드 정리
     expired = [k for k, v in _pending_codes.items() if v < now]
     for k in expired: del _pending_codes[k]
-    
+
     if code in _pending_codes:
         del _pending_codes[code]
+        # 성공 시 시도 기록 초기화
+        _auth_attempts[client_ip] = []
         token = secrets.token_hex(32)
         _auth_sessions.add(token)
         _save_auth_sessions()
         from fastapi.responses import JSONResponse
         resp = JSONResponse({"ok": True})
-        resp.set_cookie("session_token", token, httponly=True, max_age=86400*7)
+        resp.set_cookie("session_token", token, httponly=True, max_age=86400*7, samesite="lax")
         return resp
     return {"ok": False, "error": "코드 오류 또는 만료"}
 
@@ -288,7 +302,8 @@ _AUTH_SESSIONS_PATH = os.path.join(BASE_DIR, "data", "auth_sessions.json")
 def _load_auth_sessions():
     try:
         if os.path.exists(_AUTH_SESSIONS_PATH):
-            data = json.load(open(_AUTH_SESSIONS_PATH))
+            with open(_AUTH_SESSIONS_PATH) as f:
+                data = json.load(f)
             _auth_sessions.update(data.get("sessions", []))
     except: pass
 
@@ -1842,7 +1857,8 @@ def _load_symbol():
     global _current_symbol
     try:
         if os.path.exists(_SYMBOL_PATH):
-            _current_symbol = json.load(open(_SYMBOL_PATH)).get("symbol", DEFAULT_SYMBOL)
+            with open(_SYMBOL_PATH) as f:
+                _current_symbol = json.load(f).get("symbol", DEFAULT_SYMBOL)
     except: pass
 
 def _save_symbol(symbol: str):
@@ -1860,7 +1876,8 @@ def _load_at_settings():
     global _auto_trade_enabled
     try:
         if os.path.exists(_AT_SETTINGS_PATH):
-            s = json.load(open(_AT_SETTINGS_PATH))
+            with open(_AT_SETTINGS_PATH) as f:
+                s = json.load(f)
             _auto_trade_enabled = s.get("enabled", AUTO_TRADE_ENABLED)
             if _auto_trader:
                 _auto_trader.usdt_per_trade = s.get("usdt_per_trade", AUTO_TRADE_USDT)

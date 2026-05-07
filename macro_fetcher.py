@@ -160,10 +160,15 @@ def _yf_close_series(ticker: str, period: str = "60d") -> Optional[pd.Series]:
     """yfinance로 단일 티커 종가 시계열 조회."""
     try:
         import yfinance as yf
-        data = yf.download(
-            ticker, period=period, interval="1d",
-            progress=False, auto_adjust=True, threads=False,
-        )
+        import concurrent.futures as _cf
+        def _dl():
+            return yf.download(
+                ticker, period=period, interval="1d",
+                progress=False, auto_adjust=True, threads=False,
+            )
+        with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_dl)
+            data = future.result(timeout=30)
         return _extract_close(data)
     except Exception:
         return None
