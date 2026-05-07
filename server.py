@@ -1476,7 +1476,7 @@ _macro_snapshot = MacroSnapshotManager()
 
 
 # 수동 분석 버튼 쿨다운: 10분
-MANUAL_COOLDOWN_SECS = 0
+MANUAL_COOLDOWN_SECS = 600
 MANUAL_COOLDOWN_STATE_PATH = os.path.join(BASE_DIR, "data", "manual_cooldown.json")
 
 
@@ -1798,7 +1798,7 @@ SCHEDULE_STATE_PATH = os.path.join(BASE_DIR, "data", "schedule_state.json")
 class ScheduleManager:
     """서버에서 30분마다 분석을 실행하는 백그라운드 스케줄러."""
 
-    INTERVAL_MIN = 120  # 2시간
+    INTERVAL_MIN = 240  # 4시간
 
     def __init__(self):
         self._enabled: bool = False
