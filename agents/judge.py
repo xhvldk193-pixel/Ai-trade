@@ -18,6 +18,14 @@ from typing import Callable, Optional
 
 import anthropic
 
+
+def _get_client():
+    """단일 anthropic 클라이언트 반환 (순환 임포트 회피용 lazy import)."""
+    from agents import get_anthropic_client
+    return get_anthropic_client()
+
+
+
 from config import CLAUDE_API_KEY
 
 try:
@@ -267,7 +275,7 @@ def run_judge(
         + "전체 시황은 Bull/Bear가 이미 요약했으므로 그들의 주장에 집중하세요."
     )
 
-    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    client = _get_client()
     t0 = time.time()
     try:
         raw = _call_llm(client, JUDGE_SYSTEM, cacheable_user, variable_user)

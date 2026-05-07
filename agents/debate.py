@@ -13,6 +13,12 @@ from typing import Callable, Optional
 
 import anthropic
 
+
+def _get_client():
+    """단일 anthropic 클라이언트 반환 (순환 임포트 회피용 lazy import)."""
+    from agents import get_anthropic_client
+    return get_anthropic_client()
+
 from config import CLAUDE_API_KEY, CLAUDE_MODEL
 from .prompts import (
     BULL_SYSTEM,
@@ -166,7 +172,7 @@ def run_bull_bear_debate(
     if not CLAUDE_API_KEY:
         return DebateResult(enabled=False, rounds=0, error="CLAUDE_API_KEY 미설정")
 
-    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    client = _get_client()
     result = DebateResult(enabled=True, rounds=rounds)
 
     # 메모리 쿼리 — situation_tags > 핵심 키워드 추출 > blob 앞부분

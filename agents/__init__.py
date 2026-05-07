@@ -21,6 +21,30 @@ import logging as _logging
 
 _log = _logging.getLogger(__name__)
 
+
+# ── 단일 Anthropic 클라이언트 ────────────────────────
+# 분석 1회당 5개 에이전트가 각자 client = anthropic.Anthropic(...) 으로 생성하면
+# HTTP connection pool 이 매번 새로 만들어지고 5개 동시 생성됨.
+# 모듈 전역 단일 인스턴스로 통일 — connection pool 재사용.
+_anthropic_client = None
+_anthropic_client_lock = None  # threading.Lock - 지연 생성
+
+def get_anthropic_client():
+    """전역 anthropic.Anthropic 인스턴스 반환. 첫 호출 시 lazy 생성."""
+    global _anthropic_client, _anthropic_client_lock
+    if _anthropic_client is not None:
+        return _anthropic_client
+    if _anthropic_client_lock is None:
+        import threading
+        _anthropic_client_lock = threading.Lock()
+    with _anthropic_client_lock:
+        if _anthropic_client is None:
+            import anthropic as _a
+            from config import CLAUDE_API_KEY as _key
+            _anthropic_client = _a.Anthropic(api_key=_key)
+    return _anthropic_client
+
+
 # ── Phase 1 ─────────────────────────────────────────
 from .debate import run_bull_bear_debate, format_debate_block, DebateResult
 

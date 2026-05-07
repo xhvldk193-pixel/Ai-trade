@@ -16,6 +16,14 @@ from typing import Callable, Optional
 
 import anthropic
 
+
+def _get_client():
+    """단일 anthropic 클라이언트 반환 (순환 임포트 회피용 lazy import)."""
+    from agents import get_anthropic_client
+    return get_anthropic_client()
+
+
+
 from config import CLAUDE_API_KEY
 from .risk_prompts import (
     AGGRESSIVE_SYSTEM,
@@ -255,7 +263,7 @@ def run_risk_triad(
         if m:
             judge_verdict = m.group(1)
 
-    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    client = _get_client()
     result = RiskTriadResult(enabled=True, rounds=rounds)
 
     # 메모리 쿼리 개선: 키워드 라인 추출

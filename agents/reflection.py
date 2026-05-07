@@ -21,6 +21,14 @@ from typing import Optional
 
 import anthropic
 
+
+def _get_client():
+    """단일 anthropic 클라이언트 반환 (순환 임포트 회피용 lazy import)."""
+    from agents import get_anthropic_client
+    return get_anthropic_client()
+
+
+
 from config import CLAUDE_API_KEY
 from .memory import FinancialSituationMemory, get_memory
 
@@ -363,7 +371,7 @@ def reflect_for_role(
         missed_instruction=missed_instruction,
     )
 
-    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    client = _get_client()
     try:
         reflection_text = _call_llm(client, system_prompt, prompt)
     except Exception as exc:
