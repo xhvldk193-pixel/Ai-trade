@@ -1,6 +1,11 @@
-import logging, requests
+import logging, requests, time
 log = logging.getLogger(__name__)
 _T = ""; _C = ""
+
+# 거부 알림 쓰로틀 — 같은 사유로 4시간마다 거부될 때 알림 반복되는 문제 해결.
+# {reason_key: last_sent_ts} — 같은 사유 1시간 내 1번만 발송.
+_last_reject_alerts: dict[str, float] = {}
+_REJECT_THROTTLE_SECS = 3600  # 1시간
 
 def init(t, c):
     global _T, _C
@@ -39,7 +44,10 @@ def alert_trade(r):
     )
 
 def alert_trade_rejected(r):
-    """진입 거부 알림 — R:R 미달 / SL 없음 / 확신도 미달 / TP 미설정 / 사이즈 0."""
+    """진입 거부 알림 — R:R 미달 / SL 없음 / 확신도 미달 / TP 미설정 / 사이즈 0.
+
+    같은 사유가 반복될 때 알림 폭격 방지 — 1시간에 1번만 발송.
+    """
     reason = r.get("reason", "")
     # 새 거부 사유들도 잡도록 키워드 확장
     _reject_keywords = (
@@ -47,9 +55,20 @@ def alert_trade_rejected(r):
         "TP 미설정",   # 자동 TP 보정 비활성 + AI 가 TP 안 줄 때
         "사이즈 0",    # 잔고 부족 또는 거래소 최소 단위 미만
         "최소 단위",   # 보강 키워드
+        "반대 포지션", # 청산 미완료
     )
     if not any(kw in reason for kw in _reject_keywords):
         return
+
+    # 쓰로틀 체크 — 같은 사유 1시간 내 재발송 방지.
+    # 사유 앞 30자로 그룹핑 (같은 사유면 가격만 다른 경우가 많아 prefix 매칭).
+    now = time.time()
+    throttle_key = reason[:30]
+    last_sent = _last_reject_alerts.get(throttle_key, 0)
+    if now - last_sent < _REJECT_THROTTLE_SECS:
+        return  # 1시간 내 같은 사유 → 스킵
+    _last_reject_alerts[throttle_key] = now
+
     signal = r.get("signal", "")
     confidence = r.get("confidence", 0)
     price = r.get("price", 0)
@@ -70,6 +89,7 @@ def alert_trade_rejected(r):
         lines.append(f"SL: ${sl:,.0f}")
     if rr:
         lines.append(f"R:R: {rr:.2f}")
+    lines.append("(1시간 내 같은 사유 알림은 스킵됩니다)")
     send("\n".join(lines))
 
 def alert_analysis(a, p, min_confidence=65, **k):

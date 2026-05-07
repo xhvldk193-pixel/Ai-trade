@@ -399,7 +399,19 @@ class BitgetAutoTrader:
             except Exception:
                 pass
             self.client.close_all(self.symbol)
-            time.sleep(0.8)
+            # 청산 검증 — 0.8초 고정 sleep 대신 polling 으로 확인.
+            # 비트겟이 청산 처리하기 전에 신규 진입하면 헤지 모드 충돌 또는 거부 가능.
+            cleared = False
+            for _ in range(10):  # 최대 5초 (10 × 0.5초)
+                time.sleep(0.5)
+                if not self._current_side():
+                    cleared = True
+                    break
+            if not cleared:
+                log.warning("[AutoTrader] 반대 포지션 청산 미확인 → 진입 보류")
+                result["reason"] = "반대 포지션 청산 미완료 → 다음 사이클 재시도"
+                self._last = result
+                return result
 
         # 독립(Isolated) 마진 + 레버리지 설정
         for hs in ("long", "short"):
@@ -537,3 +549,75 @@ class BitgetAutoTrader:
         except Exception:
             pass
         return self.client.close_all(self.symbol)
+
+    def update_position_tpsl(self, new_tp=None, new_sl=None, breakeven_at_pct: float = 1.0) -> dict:
+        """현재 보유 포지션의 거래소 TP/SL 업데이트.
+
+        - 분석 사이클마다 호출되어 AI 권고 SL/TP 를 거래소에 반영.
+        - 본전 이동(breakeven): 진입 후 breakeven_at_pct 이상 이익 시 SL 을 진입가로 이동.
+          new_sl 이 None 이거나 본전보다 불리하면 본전이 우선 적용됨.
+
+        반환: {updated: bool, reason: str, side, entry, applied_tp, applied_sl}
+        """
+        result = {"updated": False, "reason": "", "side": None, "entry": None,
+                  "applied_tp": None, "applied_sl": None}
+        try:
+            positions = self.get_positions(self.symbol) if False else self.client.get_positions(self.symbol)
+        except Exception as e:
+            result["reason"] = f"포지션 조회 실패: {e}"
+            return result
+        if not positions:
+            result["reason"] = "보유 포지션 없음"
+            return result
+
+        # 첫 번째 포지션만 처리 (단일 심볼 단일 포지션 가정)
+        p = positions[0]
+        side  = p.get("holdSide") or p.get("side")
+        entry = float(p.get("averageOpenPrice", 0) or 0)
+        size  = float(p.get("size", 0) or 0)
+        cur   = float(p.get("markPrice", 0) or 0)
+        if not side or entry <= 0 or size <= 0:
+            result["reason"] = "포지션 정보 불완전"
+            return result
+
+        result["side"] = side
+        result["entry"] = entry
+
+        # 본전 이동 판정 — 현재가가 진입가 대비 breakeven_at_pct 이상 이익이면 SL 을 본전으로
+        if cur > 0:
+            profit_pct = ((cur - entry) / entry * 100) * (1 if side == "long" else -1)
+            if profit_pct >= breakeven_at_pct:
+                # 새 SL 후보가 본전보다 불리(더 멀리)하면 본전으로 강제
+                if new_sl is None:
+                    new_sl = entry
+                else:
+                    if side == "long" and new_sl < entry:
+                        new_sl = entry
+                    elif side == "short" and new_sl > entry:
+                        new_sl = entry
+                log.info("[AutoTrader] 본전 이동 적용 — profit %.2f%% → SL=$%.2f",
+                         profit_pct, new_sl)
+
+        # 새 TP/SL 적용 — 기존 plan 주문 모두 취소 후 신규 등록
+        if new_tp is None and new_sl is None:
+            result["reason"] = "변경할 TP/SL 없음"
+            return result
+
+        try:
+            self.client.cancel_all_tpsl(self.symbol)
+        except Exception:
+            pass
+
+        try:
+            if new_tp is not None:
+                self.client.set_tp(self.symbol, float(new_tp), side, size)
+                result["applied_tp"] = float(new_tp)
+            if new_sl is not None:
+                self.client.set_sl(self.symbol, float(new_sl), side, size)
+                result["applied_sl"] = float(new_sl)
+            result["updated"] = True
+            result["reason"] = "TP/SL 거래소 반영 완료"
+        except Exception as e:
+            result["reason"] = f"TP/SL 등록 실패: {e}"
+            log.warning("[AutoTrader] %s", result["reason"])
+        return result

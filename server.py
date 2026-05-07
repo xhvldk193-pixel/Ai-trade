@@ -1752,7 +1752,7 @@ class AnalysisManager:
                 AUTO_TRADE_MIN_CONF
             )
 
-            # ── 포지션 있을 때 관리 알림
+            # ── 포지션 있을 때 관리 알림 + 거래소 TP/SL 동적 업데이트
             if _auto_trader:
                 try:
                     positions = await asyncio.to_thread(_auto_trader.get_positions)
@@ -1772,6 +1772,25 @@ class AnalysisManager:
                             if new_tp:
                                 msg += f"AI 권고 익절: ${new_tp:,.2f}"
                             _tg(msg)
+
+                        # 거래소 TP/SL 실제 업데이트 — 본전 이동 + AI 권고 반영.
+                        # 환경변수 AUTO_TRADE_DYNAMIC_TPSL=true 여야 동작 (기본 false).
+                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "false").lower() == "true":
+                            try:
+                                update_result = await asyncio.to_thread(
+                                    _auto_trader.update_position_tpsl,
+                                    new_tp, new_sl,
+                                    float(os.environ.get("AUTO_TRADE_BREAKEVEN_PCT", "1.0")),
+                                )
+                                if update_result.get("updated"):
+                                    _tg(
+                                        f"🔧 TP/SL 거래소 반영\n"
+                                        f"{update_result.get('side','').upper()} 진입가 ${update_result.get('entry',0):,.2f}\n"
+                                        f"새 TP: ${update_result.get('applied_tp') or 0:,.2f} | "
+                                        f"새 SL: ${update_result.get('applied_sl') or 0:,.2f}"
+                                    )
+                            except Exception as _exc:
+                                print(f"[update_tpsl] 실패: {_exc}", flush=True)
                 except Exception:
                     pass
 
