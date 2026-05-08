@@ -57,7 +57,7 @@ BITGET_PASSPHRASE = _safe_env("BITGET_PASSPHRASE")
 # TP/SL 전략: Claude AI의 피보나치 기반 목표가/손절가를 그대로 거래소에 전달
 AUTO_TRADE_ENABLED  = _safe_env("AUTO_TRADE_ENABLED", "false").lower() == "true"
 AUTO_TRADE_USDT     = float(_safe_env("AUTO_TRADE_USDT",    "20"))    # 1회 거래 증거금 (USDT)
-AUTO_TRADE_LEVERAGE = int(_safe_env("AUTO_TRADE_LEVERAGE",  "3"))     # 레버리지 배수
+AUTO_TRADE_LEVERAGE = int(_safe_env("AUTO_TRADE_LEVERAGE",  "10"))     # 레버리지 배수
 AUTO_TRADE_MIN_CONF = int(_safe_env("AUTO_TRADE_MIN_CONF",  "65"))    # 최소 AI 확신도 (%)
 AUTO_TRADE_USE_TP   = _safe_env("AUTO_TRADE_USE_TP", "true").lower()  == "true"
 AUTO_TRADE_USE_SL   = _safe_env("AUTO_TRADE_USE_SL", "true").lower()  == "true"
