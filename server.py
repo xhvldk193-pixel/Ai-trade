@@ -1775,28 +1775,21 @@ class AnalysisManager:
 
                         # 거래소 TP/SL 실제 업데이트 — 본전 이동 + AI 권고 반영.
                         # 환경변수 AUTO_TRADE_DYNAMIC_TPSL=true 여야 동작 (기본 false).
-                        _dyn_flag = os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "false")
-                        # [디버그] 환경변수 값 확인용 알림 — 문제 파악 후 제거 가능
-                        _tg(f"🔍 디버그: DYNAMIC_TPSL={_dyn_flag} | new_tp={new_tp} | new_sl={new_sl}")
-                        if _dyn_flag.lower() == "true":
+                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "false").lower() == "true":
                             try:
                                 update_result = await asyncio.to_thread(
                                     _auto_trader.update_position_tpsl,
                                     new_tp, new_sl,
                                     float(os.environ.get("AUTO_TRADE_BREAKEVEN_PCT", "1.0")),
                                 )
-                                # [디버그] 결과 무조건 알림 — updated 가 False 여도 사유 확인
-                                _tg(
-                                    f"🔧 TP/SL 업데이트 시도 결과\n"
-                                    f"updated={update_result.get('updated')}\n"
-                                    f"reason={update_result.get('reason')}\n"
-                                    f"side={update_result.get('side')}\n"
-                                    f"entry=${update_result.get('entry') or 0:,.2f}\n"
-                                    f"applied_tp=${update_result.get('applied_tp') or 0:,.2f}\n"
-                                    f"applied_sl=${update_result.get('applied_sl') or 0:,.2f}"
-                                )
+                                if update_result.get("updated"):
+                                    _tg(
+                                        f"🔧 TP/SL 거래소 반영\n"
+                                        f"{update_result.get('side','').upper()} 진입가 ${update_result.get('entry',0):,.2f}\n"
+                                        f"새 TP: ${update_result.get('applied_tp') or 0:,.2f} | "
+                                        f"새 SL: ${update_result.get('applied_sl') or 0:,.2f}"
+                                    )
                             except Exception as _exc:
-                                _tg(f"⚠️ update_tpsl 예외: {type(_exc).__name__}: {str(_exc)[:200]}")
                                 print(f"[update_tpsl] 실패: {_exc}", flush=True)
                 except Exception:
                     pass
@@ -2006,10 +1999,17 @@ async def _run_reflection():
     - auth_middleware 가 /api/reflect 를 막아 401
     → 함수 직접 호출이 모든 환경에서 안전.
     """
+    _rlog = _lg.getLogger("reflection")
     try:
-        await _run_reflect_background()
+        result = await _run_reflect_background()
+        # 버그3 수정: ok=False 반환(가격 수집 실패 등)을 조용히 무시하지 않고 로깅
+        if isinstance(result, dict) and not result.get("ok"):
+            _rlog.warning("리플렉션 비정상 종료: %s", result.get("error", result))
+        else:
+            processed = result.get("processed", 0) if isinstance(result, dict) else "?"
+            _rlog.info("리플렉션 완료: processed=%s", processed)
     except Exception as e:
-        _lg.getLogger("reflection").warning("리플렉션 실패: %s", e)
+        _rlog.warning("리플렉션 실패: %s", e)
 
 async def _reflection_loop():
     """6시간마다 자동으로 /api/reflect 를 내부 호출해 리플렉션을 수행한다."""
@@ -2152,6 +2152,13 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
         # 진입 시 시장 스냅샷 저장 (학습용)
         if result.get("action") in ("long", "short"):
             try:
+                # equity_at_entry 를 스냅샷에 기록해두어야
+                # 청산 시 result_pct 계산이 정상 동작함
+                try:
+                    _snap_acct = await asyncio.to_thread(_auto_trader.get_account)
+                    _entry_equity = float(_snap_acct.get("equity", 0) or 0)
+                except Exception:
+                    _entry_equity = 0.0
                 snap = {
                     "timestamp": _now_iso(),
                     "action": result.get("action"),
@@ -2163,6 +2170,7 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                     "summary": analysis.get("summary", ""),
                     "trade_levels": trade_levels,
                     "regime": analysis.get("regime", ""),
+                    "equity_at_entry": _entry_equity,
                 }
                 snap_path = os.path.join(BASE_DIR, "data", "trade_snapshots.jsonl")
                 os.makedirs(os.path.dirname(snap_path), exist_ok=True)
@@ -2575,17 +2583,32 @@ async def _run_reflect_background():
                         continue
                     price_then = float(price_then)
 
+                    # 버그2 수정: 역할 리플렉션에도 구간 고가/저가 조회 (TP/SL 평가용)
+                    try:
+                        from data_fetcher import fetch_high_low_since as _fhls
+                        _hl2 = await asyncio.to_thread(_fhls, DEFAULT_SYMBOL, rec.timestamp)
+                        _r_price_high = _hl2.get("high")
+                        _r_price_low  = _hl2.get("low")
+                        _r_price_now  = _hl2.get("current") or price_now
+                    except Exception:
+                        _r_price_high = None
+                        _r_price_low  = None
+                        _r_price_now  = price_now
+
                     res = await loop.run_in_executor(
                         _executor,
-                        lambda r=rec, pt=price_then, el=elapsed, rl=role, rm=role_mem: _reflect_for_role(
+                        lambda r=rec, pt=price_then, el=elapsed, rl=role, rm=role_mem,
+                               pn=_r_price_now, ph=_r_price_high, pl=_r_price_low: _reflect_for_role(
                             role=rl,
                             record_ts=r.timestamp,
                             situation=r.situation,
                             advice=r.advice,
                             price_then=pt,
-                            price_now=price_now,
+                            price_now=pn,
                             elapsed_seconds=el,
                             memory=rm,
+                            price_high=ph,
+                            price_low=pl,
                         ),
                     )
                     all_results.append(res.to_dict())
