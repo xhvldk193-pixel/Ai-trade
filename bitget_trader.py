@@ -9,6 +9,8 @@ import os
 import time
 from typing import Optional
 
+import telegram_alert as _tg
+
 log = logging.getLogger(__name__)
 
 
@@ -257,18 +259,7 @@ class BitgetClient:
             return {}
 
     def _tg_alert(self, msg: str):
-        import os, requests
-        t = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        c = os.environ.get("TELEGRAM_CHAT_ID", "")
-        if t and c:
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{t}/sendMessage",
-                    json={"chat_id": c, "text": msg},
-                    timeout=5
-                )
-            except Exception:
-                pass
+        _tg.send(msg)
 
 
 # ──────────────────────────────────────────
@@ -528,18 +519,7 @@ class BitgetAutoTrader:
         return result
 
     def _tg_alert(self, msg):
-        import os, requests
-        t = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        c = os.environ.get("TELEGRAM_CHAT_ID", "")
-        if t and c:
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{t}/sendMessage",
-                    json={"chat_id": c, "text": msg},
-                    timeout=5
-                )
-            except Exception:
-                pass
+        _tg.send(msg)
 
     def last_result(self):   return dict(self._last)
     def get_positions(self): return self.client.get_positions(self.symbol)
