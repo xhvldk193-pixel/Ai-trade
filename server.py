@@ -2474,8 +2474,8 @@ async def reflect_endpoint():
     메모리에 누적된 과거 기록들 중 outcome 이 비어 있는 것들을
     백그라운드에서 비동기 처리 — 타임아웃 방지.
     """
-    asyncio.create_task(_run_reflection())
-    return {"ok": True, "message": "리플렉션 백그라운드 시작됨", "processed": 0}
+    result = await _run_reflect_background()
+    return result if isinstance(result, dict) else {"ok": True, "processed": 0}
 
 
 async def _run_reflect_background():
