@@ -33,7 +33,7 @@ from config import CLAUDE_API_KEY
 from .memory import FinancialSituationMemory, get_memory
 
 
-REFLECTION_MODEL = os.getenv("REFLECTION_MODEL", "claude-haiku-4-5-20251001")
+REFLECTION_MODEL = os.getenv("REFLECTION_MODEL", "claude-haiku-4-5")
 
 
 # ── 역할별 시스템 프롬프트 ────────────────────────────
