@@ -147,7 +147,7 @@ def _is_session_valid(token: str) -> bool:
 async def auth_middleware(request, call_next):
     path = request.url.path
     # 정적 파일, 인증 엔드포인트는 통과
-    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol"):
+    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol", "/api/memory/reset"):
         return await call_next(request)
 
     # 세션 토큰 확인 (만료 검증 포함)
@@ -2474,7 +2474,7 @@ async def reflect_endpoint():
     메모리에 누적된 과거 기록들 중 outcome 이 비어 있는 것들을
     백그라운드에서 비동기 처리 — 타임아웃 방지.
     """
-    asyncio.create_task(_run_reflect_background())
+    asyncio.create_task(_run_reflection())
     return {"ok": True, "message": "리플렉션 백그라운드 시작됨", "processed": 0}
 
 
