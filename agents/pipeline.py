@@ -291,7 +291,7 @@ def run_pipeline(
                         agent_memories, role_key,
                         situation=_query,
                         advice=final_text,
-                        meta={"pair": pair_label, "rounds": risk.rounds, "price_at_analysis": price_at_analysis, **_price_meta},
+                        meta={"pair": pair_label, "rounds": risk.rounds, **_price_meta},
                     )
 
     # ── 4) Analyst 메모리 회상 ─────────────────────────

@@ -304,7 +304,10 @@ def reflect_for_role(
     missed_instruction = ""
 
     # 메모리 record에서 trade_levels 꺼내기
-    _rec = next((r for r in memory.list_pending_reflections(min_age_seconds=0, limit=9999)
+    # ※ list_pending_reflections 는 outcome 이 비어있는 것만 반환하므로
+    #    outcome 업데이트 후 조회하면 _rec=None 이 돼 TP/SL 블록이 누락됨.
+    #    list_records() 를 사용해 outcome 여부와 무관하게 항상 meta 를 읽는다.
+    _rec = next((r for r in memory.list_records()
                  if r.timestamp == record_ts), None)
     _meta = (_rec.meta or {}) if _rec else {}
     _tl = _meta.get("trade_levels") or {}
