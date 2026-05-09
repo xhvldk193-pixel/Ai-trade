@@ -178,12 +178,37 @@ class FinancialSituationMemory:
             self._append_to_disk(rec)
         return rec
 
+    @staticmethod
+    def _norm_ts(ts: str) -> str:
+        """타임스탬프를 비교용 정규형으로 통일 (초 단위 UTC, Z 표기)."""
+        if not ts:
+            return ""
+        try:
+            _ts = ts.strip().replace(" ", "T")
+            if _ts.endswith("Z"):
+                _ts = _ts[:-1] + "+00:00"
+            dt = datetime.fromisoformat(_ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception:
+            return ts.strip()
+
     def update_outcome(self, timestamp: str, outcome: str) -> bool:
         """
         특정 timestamp 의 기록에 사후 결과를 덧붙인다.
         Reflection 에서 사용.
+        Z / +00:00 / 공백 등 형식 차이를 정규화해 비교 — 미기록 고착 버그 수정.
         """
+        norm_target = self._norm_ts(timestamp)
         with self._lock:
+            # 정규화 비교 (주 경로)
+            for r in self._records:
+                if self._norm_ts(r.timestamp) == norm_target:
+                    r.outcome = (r.outcome + "\n" + outcome).strip() if r.outcome else outcome
+                    self._rewrite_disk()
+                    return True
+            # fallback: 원본 문자열 완전 일치
             for r in self._records:
                 if r.timestamp == timestamp:
                     r.outcome = (r.outcome + "\n" + outcome).strip() if r.outcome else outcome
@@ -309,7 +334,12 @@ class FinancialSituationMemory:
                 if rec.outcome:
                     continue
                 try:
-                    ts = _dt.datetime.fromisoformat(rec.timestamp.replace("Z", "+00:00"))
+                    _raw_ts = rec.timestamp.strip().replace(" ", "T")
+                    if _raw_ts.endswith("Z"):
+                        _raw_ts = _raw_ts[:-1] + "+00:00"
+                    ts = _dt.datetime.fromisoformat(_raw_ts)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=_dt.timezone.utc)
                 except Exception:
                     continue
                 elapsed = (now - ts).total_seconds()
