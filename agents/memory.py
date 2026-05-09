@@ -221,23 +221,6 @@ class FinancialSituationMemory:
                     return True
         return False
 
-    def update_meta(self, timestamp: str, meta_patch: dict) -> bool:
-        """
-        특정 timestamp 의 meta 를 부분 업데이트한다.
-        기존 meta 키는 유지하고 meta_patch 의 키만 덮어씀.
-        체크리스트·반복실수 패턴 저장에 사용.
-        """
-        norm_target = self._norm_ts(timestamp)
-        with self._lock:
-            for r in self._records:
-                if self._norm_ts(r.timestamp) == norm_target:
-                    if r.meta is None:
-                        r.meta = {}
-                    r.meta.update(meta_patch)
-                    self._rewrite_disk()
-                    return True
-        return False
-
     @staticmethod
     def _jaccard(a: list[str], b: list[str]) -> float:
         """토큰 집합 간 Jaccard 유사도 (0~1)."""
@@ -415,52 +398,105 @@ def format_memory_block(memories: list[dict]) -> str:
         ts = rec.get("timestamp", "?")
         score = item.get("score", 0.0)
         situation = (rec.get("situation") or "").strip()
-        advice = (rec.get("advice") or "").strip()
-        outcome = (rec.get("outcome") or "").strip()
-        meta = rec.get("meta") or {}
-        # meta에 구조화 저장된 체크리스트/반복실수 (reflection 단계에서 파싱 저장)
-        _meta_checklist = meta.get("checklist") or []
-        _meta_avoid     = meta.get("avoid_pattern", "")
-
-        # judge_verdict / judge 핵심근거 메타 추출 — 판정 패턴 학습 강화
-        meta = rec.get("meta") or {}
-        _judge_v    = meta.get("judge_verdict", "")
-        _judge_bull = meta.get("judge_bull_key", "")
-        _judge_bear = meta.get("judge_bear_key", "")
+        advice    = (rec.get("advice")    or "").strip()
+        outcome   = (rec.get("outcome")   or "").strip()
+        meta      = rec.get("meta") or {}
 
         lines.append(f"\n— 사례 {i} · {ts} · 유사도 {score:.2f} —")
-        if _judge_v:
-            _jl = f"Judge 판정: {_judge_v}"
-            if _judge_bull:
-                _jl += f" (Bull: {_judge_bull[:60]}"
-                _jl += f" / Bear: {_judge_bear[:60]}" if _judge_bear else ""
-                _jl += ")"
-            lines.append(f"  ⚖ {_jl}")
+
+        # ── situation: 태그 그대로 (이미 압축된 형태) ──────────────
         if situation:
-            # 프롬프트 주입용 — 300자로 압축 (UI는 state.memories[] 직접 읽음)
             snippet = situation if len(situation) <= 300 else situation[:300] + " …"
             lines.append(f"  상황: {snippet}")
+
+        # ── advice: 핵심 4가지만 파싱 ────────────────────────────
+        # 먼저보이는사실/해석/관심레벨은 situation 태그에 이미 있음 → 삭제
+        # 관점/확신도/파라미터/한줄요약만 추출 — 토큰 65% 절감, 학습 품질 유지
         if advice:
-            # 핵심 논거는 앞부분에 집중 — 200자로 압축
-            snippet = advice if len(advice) <= 200 else advice[:200] + " …"
-            lines.append(f"  당시 조언: {snippet}")
+            _adv_lines = {
+                "관점":    "",
+                "확신도":  "",
+                "파라미터": "",
+                "요약":    "",
+            }
+            _in_param = False
+            _param_lines: list[str] = []
+            for _ln in advice.splitlines():
+                _s = _ln.strip()
+                if _s.startswith("📊 관점:"):
+                    _adv_lines["관점"] = _s
+                elif _s.startswith("💯 확신도:"):
+                    _adv_lines["확신도"] = _s
+                elif _s.startswith("🤖 매매 파라미터"):
+                    _in_param = True
+                elif _in_param and _s.startswith("•"):
+                    _param_lines.append(_s)
+                elif _in_param and _s and not _s.startswith("•"):
+                    _in_param = False
+                elif _s.startswith("💬 한줄 요약:"):
+                    _adv_lines["요약"] = _s
+            _adv_parts = [v for v in _adv_lines.values() if v]
+            if _param_lines:
+                _adv_parts.insert(2, "  " + " / ".join(_param_lines))
+            if _adv_parts:
+                lines.append("  당시 판단: " + " | ".join(
+                    [_adv_lines["관점"], _adv_lines["확신도"]]
+                ))
+                if _param_lines:
+                    lines.append("  파라미터: " + " / ".join(_param_lines))
+                if _adv_lines["요약"]:
+                    lines.append("  " + _adv_lines["요약"])
+            else:
+                # 파싱 실패 시 폴백 — 앞 150자만
+                lines.append(f"  당시 조언: {advice[:150]} …")
+
+        # ── outcome: 맞은부분/틀린부분/체크리스트/반복실수만 ──────
+        # 분석깊이평가는 메타 평가라 학습 기여 낮음 → 삭제
         if outcome:
-            # 체크리스트 + 반복 실수 금지 두 줄 모두 추출해 상단 강조
-            checklist_line = ""
-            repeat_line = ""
-            for _cl in outcome.splitlines():
-                _s = _cl.strip()
-                if _s.startswith("다음 체크리스트:") and not checklist_line:
-                    checklist_line = _s
-                if _s.startswith("반복 실수 금지:") and not repeat_line:
-                    repeat_line = _s
-            if checklist_line:
-                lines.append(f"  ⚑ {checklist_line}")
-            if repeat_line:
-                lines.append(f"  ⚠ {repeat_line}")
-            # 체크리스트/반복실수는 위에서 별도 강조 — 여기선 나머지 맥락만
-            snippet = outcome if len(outcome) <= 400 else outcome[:400] + " …"
-            lines.append(f"  실제 결과: {snippet}")
+            _correct   = []
+            _wrong     = []
+            _checklist = ""
+            _avoid     = ""
+            _section   = None
+            for _ln in outcome.splitlines():
+                _s = _ln.strip()
+                if not _s:
+                    continue
+                if "✅" in _s and ("맞은" in _s or "correct" in _s.lower()):
+                    _section = "correct"; continue
+                if "❌" in _s and ("틀린" in _s or "wrong" in _s.lower()):
+                    _section = "wrong";   continue
+                if "🔍" in _s or _s.startswith("분석 깊이"):
+                    _section = None;      continue  # 분석깊이평가 스킵
+                if _s.startswith("다음 체크리스트:"):
+                    _checklist = _s;      _section = None; continue
+                if _s.startswith("반복 실수 금지:"):
+                    _avoid = _s;          _section = None; continue
+                if _section == "correct" and _s.startswith("•"):
+                    _correct.append(_s[:80])
+                elif _section == "wrong" and _s.startswith("•"):
+                    _wrong.append(_s[:80])
+
+            # 가격 변화 요약 (첫 줄)
+            _first = outcome.splitlines()[0].strip() if outcome.splitlines() else ""
+            if _first:
+                lines.append(f"  결과: {_first}")
+            if _correct:
+                lines.append("  ✅ " + " / ".join(_correct[:2]))
+            if _wrong:
+                lines.append("  ❌ " + " / ".join(_wrong[:2]))
+            if _checklist:
+                lines.append(f"  ⚑ {_checklist}")
+            if _avoid:
+                lines.append(f"  ⚠ {_avoid}")
+
+            # meta에 구조화 저장된 체크리스트 우선 활용
+            _meta_cl = meta.get("checklist") or []
+            _meta_av = meta.get("avoid_pattern", "")
+            if _meta_cl and not _checklist:
+                lines.append("  ⚑ 다음 체크리스트: " + " / ".join(_meta_cl))
+            if _meta_av and not _avoid:
+                lines.append(f"  ⚠ 반복 실수 금지: {_meta_av}")
         else:
             lines.append("  실제 결과: (아직 리플렉션 미기록)")
 
@@ -529,35 +565,86 @@ class AgentMemories:
             return ""
         lines = ["[과거 유사 상황에서의 내 판단 이력]"]
         for i, item in enumerate(mems, 1):
-            rec = item.get("record", {}) if isinstance(item, dict) else {}
+            rec   = item.get("record", {}) if isinstance(item, dict) else {}
             score = item.get("score", 0.0)
-            advice = (rec.get("advice") or "").strip()
+            advice  = (rec.get("advice")  or "").strip()
             outcome = (rec.get("outcome") or "").strip()
-            ts = rec.get("timestamp", "?")
-            # 역할별 회상 — outcome 에 리플렉션 교훈이 담기므로 충분히 전달
-            advice_snippet  = advice[:400]  + " …" if len(advice)  > 400  else advice
-            outcome_snippet = outcome[:600] + " …" if len(outcome) > 600 else outcome
-
-            # "다음 체크리스트:" 항목을 별도 추출해 회상 상단에 강조
-            checklist_line = ""
-            repeat_line = ""
-            if outcome:
-                for _cl in outcome.splitlines():
-                    _s = _cl.strip()
-                    if _s.startswith("다음 체크리스트:") and not checklist_line:
-                        checklist_line = _s
-                    if _s.startswith("반복 실수 금지:") and not repeat_line:
-                        repeat_line = _s
+            ts      = rec.get("timestamp", "?")
+            meta    = rec.get("meta") or {}
 
             lines.append(f"\n— 사례 {i} · {ts} · 유사도 {score:.2f} —")
-            if checklist_line:
-                lines.append(f"  ⚑ {checklist_line}")
-            if repeat_line:
-                lines.append(f"  ⚠ {repeat_line}")
-            if advice_snippet:
-                lines.append(f"  당시 주장: {advice_snippet}")
-            if outcome_snippet:
-                lines.append(f"  이후 결과: {outcome_snippet}")
+
+            # ── advice: 관점/확신도/파라미터/요약만 파싱 ──────────
+            if advice:
+                _관점 = _확신도 = _요약 = ""
+                _params: list[str] = []
+                _in_param = False
+                for _ln in advice.splitlines():
+                    _s = _ln.strip()
+                    if _s.startswith("📊 관점:"):
+                        _관점 = _s
+                    elif _s.startswith("💯 확신도:"):
+                        _확신도 = _s
+                    elif _s.startswith("🤖 매매 파라미터"):
+                        _in_param = True
+                    elif _in_param and _s.startswith("•"):
+                        _params.append(_s)
+                    elif _in_param and _s and not _s.startswith("•"):
+                        _in_param = False
+                    elif _s.startswith("💬 한줄 요약:"):
+                        _요약 = _s
+                _head = " | ".join(x for x in [_관점, _확신도] if x)
+                if _head:
+                    lines.append(f"  당시 판단: {_head}")
+                if _params:
+                    lines.append("  파라미터: " + " / ".join(_params))
+                if _요약:
+                    lines.append(f"  {_요약}")
+                if not _head:
+                    lines.append(f"  당시 주장: {advice[:150]} …")
+
+            # ── outcome: 결과/맞은부분/틀린부분/체크리스트/반복실수만 ──
+            if outcome:
+                _correct: list[str] = []
+                _wrong:   list[str] = []
+                _checklist = _avoid = ""
+                _section = None
+                for _ln in outcome.splitlines():
+                    _s = _ln.strip()
+                    if not _s:
+                        continue
+                    if "✅" in _s and "맞은" in _s:
+                        _section = "c"; continue
+                    if "❌" in _s and "틀린" in _s:
+                        _section = "w"; continue
+                    if "🔍" in _s or _s.startswith("분석 깊이"):
+                        _section = None; continue
+                    if _s.startswith("다음 체크리스트:"):
+                        _checklist = _s; _section = None; continue
+                    if _s.startswith("반복 실수 금지:"):
+                        _avoid = _s; _section = None; continue
+                    if _section == "c" and _s.startswith("•"):
+                        _correct.append(_s[:80])
+                    elif _section == "w" and _s.startswith("•"):
+                        _wrong.append(_s[:80])
+                _first = outcome.splitlines()[0].strip()
+                if _first:
+                    lines.append(f"  결과: {_first}")
+                if _correct:
+                    lines.append("  ✅ " + " / ".join(_correct[:2]))
+                if _wrong:
+                    lines.append("  ❌ " + " / ".join(_wrong[:2]))
+                if _checklist:
+                    lines.append(f"  ⚑ {_checklist}")
+                if _avoid:
+                    lines.append(f"  ⚠ {_avoid}")
+                # meta 구조화 체크리스트 보완
+                _meta_cl = meta.get("checklist") or []
+                _meta_av = meta.get("avoid_pattern", "")
+                if _meta_cl and not _checklist:
+                    lines.append("  ⚑ 다음 체크리스트: " + " / ".join(_meta_cl))
+                if _meta_av and not _avoid:
+                    lines.append(f"  ⚠ 반복 실수 금지: {_meta_av}")
             else:
                 lines.append("  이후 결과: (미기록 — reflection 대기)")
         return "\n".join(lines)
