@@ -1,91 +1,95 @@
-# =============================================
-# Claude API 연동 - 매매 시그널 분석 (인자 충돌 방어판)
-# =============================================
 import re
-import os as _os
-import logging as _logging
+import os
+import logging
 from typing import Optional, Callable, Any
 
-# ... (상단 import 및 변수 설정은 이전과 동일)
+from config import CLAUDE_API_KEY, CLAUDE_MODEL, DEFAULT_SYMBOL, symbol_to_pair
+from indicators import summarize_indicators
+from account_context import fetch_account_context, format_account_context
+from market_context import fetch_market_context, format_market_context
+from macro_fetcher import fetch_macro_context, format_macro_context
+from time_utils import now_kst
+from agents import run_pipeline, PipelineResult
+from .memory import get_memory
 
-# **수정 포인트**: progress_cb를 인자 리스트에서 아예 빼고 
-# **kwargs를 통해 내부에서 추출하도록 변경했습니다. 
-# 이렇게 하면 '중복 입력' 에러가 절대 발생하지 않습니다.
-def run_full_analysis(multi_tf_data: dict, *args, **kwargs) -> dict:
-    """
-    고도화된 분석 루틴.
-    :param multi_tf_data: 타임프레임별 데이터
-    :param args: 기타 위치 인자 (중복 방지용)
-    :param kwargs: progress_cb 및 기타 키워드 인자 흡수
-    """
-    
-    # kwargs에서 progress_cb를 찾고, 없으면 args의 첫 번째 값을 시도, 둘 다 없으면 None
-    progress_cb = kwargs.get('progress_cb')
-    if progress_cb is None and len(args) > 0:
-        progress_cb = args[0]
+_logger = logging.getLogger(__name__)
+PAIR_LABEL = symbol_to_pair(DEFAULT_SYMBOL)
 
-    def notify(msg: str):
-        if progress_cb and callable(progress_cb): 
-            try:
-                progress_cb(msg)
-            except:
-                pass
-        _logging.info(msg)
-
-    notify("📊 분석 시작 및 메모리 점검 중...")
-    
-    # 1. 메모리 초기화
-    mem = None
-    if get_memory:
-        try:
-            mem = get_memory("analyst")
-            if mem: 
-                mem.cleanup_old_no_outcome_records(days_threshold=3)
-        except Exception as e:
-            _logging.warning(f"메모리 초기화 에러: {e}")
-
-    # 2. 현재가 추출
+def _build_context_blob(multi_tf_data: dict) -> str:
+    """지표 요약 및 시장 상황 데이터 결합 (원본 로직)"""
+    indicators_summary = "\n\n".join(
+        [summarize_indicators(tf, multi_tf_data[tf]) for tf in ["1d", "4h", "1h", "15m"] if tf in multi_tf_data]
+    )
+    account_ctx = format_account_context(fetch_account_context())
+    market_ctx = format_market_context(fetch_market_context())
     try:
-        price_at_analysis = float(multi_tf_data["1h"].iloc[-1]["close"])
+        macro_ctx = format_macro_context(fetch_macro_context())
+    except: macro_ctx = ""
+    return f"{account_ctx}\n\n{market_ctx}\n\n{macro_ctx}\n\n{indicators_summary}"
+
+def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] = None):
+    """Claude 분석 수행 (원본 BM25 기억 회상 포함)"""
+    from agents import get_anthropic_client
+    client = get_anthropic_client()
+    
+    context_blob = _build_context_blob(multi_tf_data)
+    
+    # 원본 memory.py의 BM25 기반 기억 회상 유지
+    mem = get_memory("analyst")
+    past_memories = mem.get_memories_text(context_blob[:1000], top_k=3)
+    
+    debate_block = getattr(pipeline, "combined_block", "") if pipeline else ""
+    
+    system_prompt = f"당신은 {PAIR_LABEL} 전문 애널리스트입니다. 내부 분석은 깊게 하되 출력은 지정된 형식만 유지하세요."
+    user_prompt = f"분석 시각: {now_kst()}\n\n[시장 데이터]\n{context_blob}\n\n{past_memories}\n\n[에이전트 토론 결과]\n{debate_block}\n\n최종 판단을 내리세요."
+    
+    message = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1000,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}]
+    )
+    raw_text = message.content[0].text
+    
+    # 파싱 로직 (원본 규격 유지)
+    view = "중립"
+    if "상방 우위" in raw_text: view = "상방 우위"
+    elif "하방 우위" in raw_text: view = "하방 우위"
+    
+    conf_match = re.search(r'확신도\D*?(\d{1,3})', raw_text)
+    confidence = int(conf_match.group(1)) if conf_match else 50
+    
+    return {
+        "raw_text": raw_text,
+        "view": view,
+        "confidence": confidence,
+        "levels": {}, # 정규식 생략 (원본 로직에 따라 추가 가능)
+        "prompt": user_prompt
+    }
+
+def run_full_analysis(multi_tf_data: dict, progress_cb: Optional[Callable] = None, **kwargs):
+    """server.py와의 인터페이스 호환을 위해 progress_cb와 **kwargs 유지"""
+    if progress_cb: progress_cb("📊 지표 분석 및 토론 파이프라인 시작...")
+    
+    try:
+        price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
     except:
-        price_at_analysis = 0.0
+        price_now = 0.0
     
-    # 3. 에이전트 토론 실행
-    notify("🗣️ 에이전트 토론(Pipeline) 진행 중...")
-    try:
-        pipeline = run_pipeline(
-            context_blob=_build_context_blob(multi_tf_data), 
-            pair_label=PAIR_LABEL, 
-            current_situation="전략적 포지션 분석", 
-            price_at_analysis=price_at_analysis
-        )
-    except Exception as e:
-        notify(f"⚠️ 토론 파이프라인 에러: {e}")
-        pipeline = None
+    # 1. 원본 토론 파이프라인 실행
+    pipeline = run_pipeline(_build_context_blob(multi_tf_data), PAIR_LABEL, "전략 분석", price_now)
     
-    # 4. Claude 최종 판단
-    notify("🧠 Claude 최종 판단 도출 중...")
+    # 2. 최종 분석
+    if progress_cb: progress_cb("🧠 Claude 최종 판단 도출 중...")
     result = analyze_with_claude(multi_tf_data, pipeline)
     
-    # 5. 메모리 저장
-    if MEMORY_WRITE_ENABLED and mem:
-        try:
-            notify("💾 분석 결과 메모리 저장 중...")
-            debate_log = getattr(pipeline, "combined_block", "토론 생략") if pipeline else "토론 생략"
-            full_reasoning = f"[DEBATE LOG]\n{debate_log}\n\n[FINAL RESULT]\n{result['raw_text']}"
-            
-            mem.add_situation(
-                situation=result['prompt'][:1000], 
-                advice=full_reasoning,
-                meta={
-                    "confidence": result['confidence'], 
-                    "levels": result['levels'],
-                    "price_at_analysis": price_at_analysis, 
-                    "view": result['view']
-                }
-            )
-        except:
-            pass
+    # 3. 메모리 저장 (price_at_analysis를 meta에 넣어 사후 복기 가능케 함)
+    mem = get_memory("analyst")
+    mem.add_situation(
+        situation=result.get("prompt", "")[:500],
+        advice=result["raw_text"],
+        meta={"price_at_analysis": price_now}
+    )
     
-    notify("✅ 분석 완료")
+    if progress_cb: progress_cb("✅ 분석 완료")
     return result
