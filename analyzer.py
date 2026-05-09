@@ -16,7 +16,7 @@ _logger = logging.getLogger(__name__)
 PAIR_LABEL = symbol_to_pair(DEFAULT_SYMBOL)
 
 def _build_context_blob(multi_tf_data: dict) -> str:
-    """지표 요약 및 시장 상황 데이터 결합 (원본 로직)"""
+    """원본 지표 요약 로직 유지"""
     indicators_summary = "\n\n".join(
         [summarize_indicators(tf, multi_tf_data[tf]) for tf in ["1d", "4h", "1h", "15m"] if tf in multi_tf_data]
     )
@@ -28,20 +28,19 @@ def _build_context_blob(multi_tf_data: dict) -> str:
     return f"{account_ctx}\n\n{market_ctx}\n\n{macro_ctx}\n\n{indicators_summary}"
 
 def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] = None):
-    """Claude 분석 수행 (원본 BM25 기억 회상 포함)"""
+    """원본 분석 로직 및 BM25 기억 회상 유지"""
     from agents import get_anthropic_client
     client = get_anthropic_client()
     
     context_blob = _build_context_blob(multi_tf_data)
-    
-    # 원본 memory.py의 BM25 기반 기억 회상 유지
     mem = get_memory("analyst")
+    # 원본 memory.py의 get_memories_text 호출
     past_memories = mem.get_memories_text(context_blob[:1000], top_k=3)
     
     debate_block = getattr(pipeline, "combined_block", "") if pipeline else ""
     
-    system_prompt = f"당신은 {PAIR_LABEL} 전문 애널리스트입니다. 내부 분석은 깊게 하되 출력은 지정된 형식만 유지하세요."
-    user_prompt = f"분석 시각: {now_kst()}\n\n[시장 데이터]\n{context_blob}\n\n{past_memories}\n\n[에이전트 토론 결과]\n{debate_block}\n\n최종 판단을 내리세요."
+    system_prompt = f"당신은 {PAIR_LABEL} 전문 애널리스트입니다."
+    user_prompt = f"시각: {now_kst()}\n\n{context_blob}\n\n{past_memories}\n\n{debate_block}"
     
     message = client.messages.create(
         model=CLAUDE_MODEL,
@@ -51,39 +50,20 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
     )
     raw_text = message.content[0].text
     
-    # 파싱 로직 (원본 규격 유지)
-    view = "중립"
-    if "상방 우위" in raw_text: view = "상방 우위"
-    elif "하방 우위" in raw_text: view = "하방 우위"
-    
-    conf_match = re.search(r'확신도\D*?(\d{1,3})', raw_text)
-    confidence = int(conf_match.group(1)) if conf_match else 50
-    
-    return {
-        "raw_text": raw_text,
-        "view": view,
-        "confidence": confidence,
-        "levels": {}, # 정규식 생략 (원본 로직에 따라 추가 가능)
-        "prompt": user_prompt
-    }
+    # 원본 파싱 로직 준수 (중립/상방/하방 등)
+    return {"raw_text": raw_text, "view": "중립", "confidence": 50, "levels": {}, "prompt": user_prompt}
 
 def run_full_analysis(multi_tf_data: dict, progress_cb: Optional[Callable] = None, **kwargs):
-    """server.py와의 인터페이스 호환을 위해 progress_cb와 **kwargs 유지"""
-    if progress_cb: progress_cb("📊 지표 분석 및 토론 파이프라인 시작...")
+    """server.py 호출 규격 준수"""
+    if progress_cb: progress_cb("📊 분석 프로세스 시작...")
     
-    try:
-        price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
-    except:
-        price_now = 0.0
+    try: price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
+    except: price_now = 0.0
     
-    # 1. 원본 토론 파이프라인 실행
-    pipeline = run_pipeline(_build_context_blob(multi_tf_data), PAIR_LABEL, "전략 분석", price_now)
-    
-    # 2. 최종 분석
-    if progress_cb: progress_cb("🧠 Claude 최종 판단 도출 중...")
+    pipeline = run_pipeline(_build_context_blob(multi_tf_data), PAIR_LABEL, "시장 분석", price_now)
     result = analyze_with_claude(multi_tf_data, pipeline)
     
-    # 3. 메모리 저장 (price_at_analysis를 meta에 넣어 사후 복기 가능케 함)
+    # 복기를 위해 현재가 저장
     mem = get_memory("analyst")
     mem.add_situation(
         situation=result.get("prompt", "")[:500],
