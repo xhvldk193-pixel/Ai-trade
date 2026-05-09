@@ -403,11 +403,12 @@ def format_memory_block(memories: list[dict]) -> str:
 
         lines.append(f"\n— 사례 {i} · {ts} · 유사도 {score:.2f} —")
         if situation:
-            snippet = situation if len(situation) <= 600 else situation[:600] + " …"
+            # 프롬프트 주입용 — 300자로 압축 (UI는 state.memories[] 직접 읽음)
+            snippet = situation if len(situation) <= 300 else situation[:300] + " …"
             lines.append(f"  상황: {snippet}")
         if advice:
-            # 과거 조언 — 핵심 논거가 뒤에 있을 수 있어 여유 있게 유지
-            snippet = advice if len(advice) <= 600 else advice[:600] + " …"
+            # 핵심 논거는 앞부분에 집중 — 200자로 압축
+            snippet = advice if len(advice) <= 200 else advice[:200] + " …"
             lines.append(f"  당시 조언: {snippet}")
         if outcome:
             # 체크리스트 + 반복 실수 금지 두 줄 모두 추출해 상단 강조
@@ -423,7 +424,8 @@ def format_memory_block(memories: list[dict]) -> str:
                 lines.append(f"  ⚑ {checklist_line}")
             if repeat_line:
                 lines.append(f"  ⚠ {repeat_line}")
-            snippet = outcome if len(outcome) <= 1000 else outcome[:1000] + " …"
+            # 체크리스트/반복실수는 위에서 별도 강조 — 여기선 나머지 맥락만
+            snippet = outcome if len(outcome) <= 400 else outcome[:400] + " …"
             lines.append(f"  실제 결과: {snippet}")
         else:
             lines.append("  실제 결과: (아직 리플렉션 미기록)")
