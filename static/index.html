@@ -2632,7 +2632,40 @@ a.status-chip { cursor: pointer; }
               과거 판단 리플렉션 실행
             </button>
             <span id="reflect-status" class="agents-reflect-status"></span>
+            <button id="btn-mem-clean" type="button" onclick="openMemCleaner()" style="margin-top:8px;padding:6px 12px;border-radius:6px;border:1px solid #f59e0b;background:#f59e0b22;color:#f59e0b;cursor:pointer;font-size:12px;">🧹 메모리 클리너</button>
             <button onclick="if(confirm('메모리를 초기화하시겠습니까?')){fetch('/api/memory/reset',{method:'POST',credentials:'include'}).then(r=>r.json()).then(d=>{document.getElementById('reflect-status').textContent=d.ok?'초기화 완료':'실패';});}" style="margin-top:8px;padding:6px 12px;border-radius:6px;border:1px solid #dc2626;background:#dc262622;color:#dc2626;cursor:pointer;font-size:12px;">🗑️ 메모리 초기화</button>
+
+            <!-- 메모리 클리너 패널 -->
+            <div id="mem-cleaner-panel" style="display:none;margin-top:12px;padding:12px;border-radius:8px;border:1px solid #f59e0b44;background:#f59e0b11;">
+              <div style="font-size:12px;font-weight:600;color:#f59e0b;margin-bottom:8px;">🧹 메모리 클리너</div>
+              <div id="mem-stats" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">로딩 중…</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+                <label style="font-size:11px;color:var(--text-muted);">대상 역할:
+                  <select id="clean-role" style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-surface-2);color:var(--text);margin-left:4px;">
+                    <option value="all">전체</option>
+                    <option value="analyst">analyst</option>
+                    <option value="bull">bull</option>
+                    <option value="bear">bear</option>
+                    <option value="judge">judge</option>
+                    <option value="aggressive">aggressive</option>
+                    <option value="conservative">conservative</option>
+                    <option value="neutral">neutral</option>
+                  </select>
+                </label>
+                <label style="font-size:11px;color:var(--text-muted);">중복 임계값:
+                  <input id="clean-threshold" type="number" min="0.5" max="1" step="0.01" value="0.82" style="width:54px;font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-surface-2);color:var(--text);margin-left:4px;">
+                </label>
+                <label style="font-size:11px;color:var(--text-muted);">최대 보존:
+                  <input id="clean-cap" type="number" min="10" max="500" step="10" value="150" style="width:54px;font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-surface-2);color:var(--text);margin-left:4px;">건
+                </label>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button onclick="runMemClean(true)" style="padding:5px 10px;border-radius:5px;border:1px solid #6b7280;background:#6b728022;color:#9ca3af;cursor:pointer;font-size:11px;">🔍 미리보기 (dry-run)</button>
+                <button onclick="runMemClean(false)" style="padding:5px 10px;border-radius:5px;border:1px solid #f59e0b;background:#f59e0b22;color:#f59e0b;cursor:pointer;font-size:11px;">✅ 실제 정제 실행</button>
+                <button onclick="document.getElementById('mem-cleaner-panel').style.display='none'" style="padding:5px 10px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--text-muted);cursor:pointer;font-size:11px;">닫기</button>
+              </div>
+              <div id="clean-result" style="margin-top:8px;font-size:11px;color:var(--text-muted);white-space:pre-wrap;"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -5091,6 +5124,70 @@ function renderMemoryTab(memories) {
   }).join("");
 
   return cards;
+}
+
+async function openMemCleaner() {
+  const panel = document.getElementById("mem-cleaner-panel");
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+  if (panel.style.display === "block") {
+    await refreshMemStats();
+  }
+}
+
+async function refreshMemStats() {
+  const el = document.getElementById("mem-stats");
+  if (!el) return;
+  try {
+    const res = await fetch("/api/memory/stats", { credentials: "include" });
+    const data = await res.json();
+    if (!data.ok) { el.textContent = "통계 로드 실패"; return; }
+    const lines = [];
+    for (const [role, s] of Object.entries(data.stats || {})) {
+      lines.push(`${role}: 총 ${s.total}건 (리플렉션 완료 ${s.with_outcome} / 미완료 ${s.without_outcome})`);
+    }
+    lines.push(`
+합계: ${data.grand_total}건`);
+    el.textContent = lines.join("\n");
+  } catch(e) {
+    el.textContent = "통계 로드 오류: " + e.message;
+  }
+}
+
+async function runMemClean(dryRun) {
+  const resultEl = document.getElementById("clean-result");
+  const role      = document.getElementById("clean-role").value;
+  const threshold = parseFloat(document.getElementById("clean-threshold").value);
+  const cap       = parseInt(document.getElementById("clean-cap").value);
+
+  resultEl.textContent = dryRun ? "🔍 미리보기 실행 중..." : "🧹 정제 실행 중...";
+
+  try {
+    const res = await fetch("/api/memory/clean", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, threshold, cap, dry_run: dryRun }),
+    });
+    const data = await res.json();
+    if (!data.ok) { resultEl.textContent = "오류: " + (data.error || "unknown"); return; }
+
+    const lines = [
+      dryRun ? "[ 미리보기 결과 — 파일 변경 없음 ]" : "[ 정제 완료 — 파일 저장됨 (.bak 백업) ]",
+      `전체: ${data.grand_before}건 → ${data.grand_after}건 (${data.grand_removed}건 제거)`,
+      ""
+    ];
+    for (const [r, s] of Object.entries(data.roles || {})) {
+      if (s.before === 0) continue;
+      const pct = s.before > 0 ? ((s.removed / s.before) * 100).toFixed(1) : "0.0";
+      lines.push(`${r}: ${s.before} → ${s.after} (-${s.removed}, ${pct}%)`);
+      if (s.removed_dup) lines.push(`  └ 중복 제거: ${s.removed_dup}건`);
+      if (s.removed_cap) lines.push(`  └ 상한 초과: ${s.removed_cap}건`);
+    }
+    resultEl.textContent = lines.join("\n");
+    if (!dryRun) await refreshMemStats();
+  } catch(e) {
+    resultEl.textContent = "요청 오류: " + e.message;
+  }
 }
 
 async function runReflection() {
