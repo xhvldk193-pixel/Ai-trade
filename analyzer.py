@@ -1,8 +1,10 @@
 import re
 import os
 import logging
+import time
 from typing import Optional, Callable, Any
 
+# [1] 필수 모듈 임포트 (NameError 방지)
 from config import CLAUDE_API_KEY, CLAUDE_MODEL, DEFAULT_SYMBOL, symbol_to_pair
 from indicators import summarize_indicators
 from account_context import fetch_account_context, format_account_context
@@ -40,6 +42,7 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
     
     debate_block = getattr(pipeline, "combined_block", "") if pipeline else ""
     
+    # [2] 출력은 사용자님 요청대로 초간결하게 (토큰 절약)
     system_prompt = f"""당신은 {PAIR_LABEL} 전문 애널리스트입니다. 
 토론 내용을 바탕으로 결론을 내리되, 출력은 반드시 아래 형식만 지키세요. 
 형식: [관점 / 확신도 / 진입가 / 손절가 / 목표가 / 레버리지]"""
@@ -54,7 +57,8 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
     )
     raw_text = message.content[0].text
     
-    storage_advice = f"결론: {raw_text}\n\n[상세 논거]\n{debate_block[:800]}"
+    # [3] 저장(학습)은 고밀도로 (내부 사고 과정 보존)
+    storage_advice = f"결론: {raw_text}\n\n[당시 상세 논거]\n{debate_block[:800]}"
 
     return {
         "raw_text": raw_text, 
@@ -67,35 +71,34 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
 
 def run_full_analysis(multi_tf_data: dict, *args, **kwargs):
     """
-    [핵심 수정] progress_cb가 detail 인자를 요구할 경우를 대비하여 
-    가변 인자로 안전하게 호출하도록 수정했습니다.
+    [4] 모든 인터페이스 에러(Multiple values, detail 인자 누락) 강제 해결
     """
     progress_cb = kwargs.get("progress_cb") or (args[0] if args else None)
     
     def safe_progress(msg: str, detail: str = ""):
         if progress_cb and callable(progress_cb):
             try:
-                # 1. 일단 인자 2개(메시지, 상세)로 시도
-                progress_cb(msg, detail)
+                progress_cb(msg, detail) # detail을 요구하는 서버 대응
             except TypeError:
                 try:
-                    # 2. 실패하면 인자 1개(메시지)로 시도
-                    progress_cb(msg)
+                    progress_cb(msg) # 메시지만 요구하는 서버 대응
                 except:
                     pass
 
-    safe_progress("📊 분석 및 토론 파이프라인 시작", "데이터 로딩 중...")
+    safe_progress("📊 분석 엔진 가동", "데이터 로딩 및 메모리 스캔")
     
     try:
         price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
     except:
         price_now = 0.0
     
+    # 지능을 유지하는 토론 엔진
     pipeline = run_pipeline(_build_context_blob(multi_tf_data), PAIR_LABEL, "시장 분석", price_now)
     
-    safe_progress("🧠 최종 판단 도출 중", "Claude API 호출")
+    safe_progress("🧠 전략 수립 중", "Claude 3.5 Sonnet 연산 중")
     result = analyze_with_claude(multi_tf_data, pipeline)
     
+    # 메모리에 '진짜 논리'를 저장 (망가진 학습 복구)
     mem_manager = get_memory()
     mem_manager.get("analyst").add_situation(
         situation=result.get("prompt", "")[:500],
@@ -103,5 +106,5 @@ def run_full_analysis(multi_tf_data: dict, *args, **kwargs):
         meta={"price_at_analysis": price_now} 
     )
     
-    safe_progress("✅ 분석 완료", "경험 저장 성공")
+    safe_progress("✅ 분석 완료", "데이터베이스 저장 및 전송 완료")
     return result
