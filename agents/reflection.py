@@ -186,7 +186,7 @@ def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
             msg = client.messages.create(
                 model=REFLECTION_MODEL,
                 max_tokens=800,
-                system=system,
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user}],
             )
             if not hasattr(msg, "content") or not isinstance(msg.content, list):
