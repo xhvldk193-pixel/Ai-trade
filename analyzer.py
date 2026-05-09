@@ -1,11 +1,11 @@
 # =============================================
-# Claude API 연동 - 매매 시그널 분석 (학습 강화형)
+# Claude API 연동 - 매매 시그널 분석 (오류 수정 및 학습 강화형)
 # =============================================
 import re
 import time
 import os as _os
 import logging as _logging
-from typing import Optional
+from typing import Optional, Callable
 from config import CLAUDE_API_KEY, CLAUDE_MODEL, DEFAULT_SYMBOL, symbol_to_pair
 from indicators import summarize_indicators
 from account_context import fetch_account_context, format_account_context
@@ -80,7 +80,6 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: PipelineResult = None):
         debate_block=debate_block
     )
     
-    # 600토큰으로 설정하여 내부 추론 안정성 확보
     max_t = int(_os.getenv("ANALYST_MAX_TOKENS", "600"))
     message = client.messages.create(
         model=CLAUDE_MODEL,
@@ -93,32 +92,45 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: PipelineResult = None):
     
     return {"view": view, "confidence": confidence, "raw_text": raw_text, "levels": parse_trade_levels(raw_text), "prompt": prompt}
 
-def run_full_analysis(multi_tf_data: dict):
-    # 분석 전 메모리 자동 정제 실행
+def run_full_analysis(multi_tf_data: dict, progress_cb: Optional[Callable[[str], None]] = None):
+    """
+    고도화된 분석 루틴.
+    :param progress_cb: 진행 상황을 알리는 콜백 함수 (오류 수정 핵심)
+    """
+    def notify(msg: str):
+        if progress_cb: progress_cb(msg)
+        _logging.info(msg)
+
+    notify("📊 분석 시작 및 메모리 정제 중...")
     if get_memory:
         mem = get_memory("analyst")
         if mem: mem.cleanup_old_no_outcome_records(days_threshold=3)
 
     price_at_analysis = float(multi_tf_data["1h"].iloc[-1]["close"])
+    
+    notify("🗣️ 에이전트 토론(Pipeline) 진행 중...")
     pipeline = run_pipeline(
         context_blob=_build_context_blob(multi_tf_data), 
         pair_label=PAIR_LABEL, 
-        current_situation="...", 
+        current_situation="전략적 포지션 분석", 
         price_at_analysis=price_at_analysis
     )
     
+    notify("🧠 Claude 최종 판단 도출 중...")
     result = analyze_with_claude(multi_tf_data, pipeline)
     
     if MEMORY_WRITE_ENABLED and mem:
-        # [학습 강화] 저장 시에는 에이전트 토론 로그를 포함하여 저장
+        notify("💾 분석 결과 메모리 저장 중...")
         full_reasoning = f"[DEBATE LOG]\n{pipeline.combined_block}\n\n[FINAL RESULT]\n{result['raw_text']}"
         mem.add_situation(
             situation=result['prompt'][:1000], 
             advice=full_reasoning,
-            outcome="", # reflection.py가 채울 예정
+            outcome="",
             meta={
                 "confidence": result['confidence'], "levels": result['levels'],
                 "price_at_analysis": price_at_analysis, "view": result['view']
             }
         )
+    
+    notify("✅ 분석 완료")
     return result
