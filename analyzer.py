@@ -11,7 +11,6 @@ from macro_fetcher import fetch_macro_context, format_macro_context
 from time_utils import now_kst
 from agents import run_pipeline, PipelineResult
 
-# 임포트 경로 호환성
 try:
     from agents.memory import get_memory
 except ImportError:
@@ -37,7 +36,6 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
     
     context_blob = _build_context_blob(multi_tf_data)
     mem_manager = get_memory() 
-    # 과거 기억 회상 (이전 리플렉션 결과가 포함된 storage_advice를 읽어옴)
     past_memories = mem_manager.get_memories_text("analyst", context_blob[:1000], top_k=3)
     
     debate_block = getattr(pipeline, "combined_block", "") if pipeline else ""
@@ -50,14 +48,12 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
     
     message = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=300, # 사용자님 요청대로 토큰 절약
+        max_tokens=300, 
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}]
     )
     raw_text = message.content[0].text
     
-    # [중요] 사용자에게는 안 보이지만, 메모리(JSONL)에는 토론 내용을 꽉 채워 저장
-    # 나중에 BM25가 이 내용을 읽어와서 past_memories에 넣어줍니다.
     storage_advice = f"결론: {raw_text}\n\n[상세 논거]\n{debate_block[:800]}"
 
     return {
@@ -71,35 +67,41 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
 
 def run_full_analysis(multi_tf_data: dict, *args, **kwargs):
     """
-    [TypeError 해결] server.py가 progress_cb를 위치 인자로 주든, 키워드 인자로 주든 
-    중복 에러 없이 받아내도록 구조를 변경함.
+    [핵심 수정] progress_cb가 detail 인자를 요구할 경우를 대비하여 
+    가변 인자로 안전하게 호출하도록 수정했습니다.
     """
-    # progress_cb 추출 로직
     progress_cb = kwargs.get("progress_cb") or (args[0] if args else None)
     
-    if progress_cb and callable(progress_cb):
-        progress_cb("📊 분석 및 토론 파이프라인 시작...")
+    def safe_progress(msg: str, detail: str = ""):
+        if progress_cb and callable(progress_cb):
+            try:
+                # 1. 일단 인자 2개(메시지, 상세)로 시도
+                progress_cb(msg, detail)
+            except TypeError:
+                try:
+                    # 2. 실패하면 인자 1개(메시지)로 시도
+                    progress_cb(msg)
+                except:
+                    pass
+
+    safe_progress("📊 분석 및 토론 파이프라인 시작", "데이터 로딩 중...")
     
     try:
         price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
     except:
         price_now = 0.0
     
-    # 1. Bull/Bear/Judge 토론 (내부 사고 과정)
     pipeline = run_pipeline(_build_context_blob(multi_tf_data), PAIR_LABEL, "시장 분석", price_now)
     
-    # 2. 최종 요약 (사용자용 출력)
+    safe_progress("🧠 최종 판단 도출 중", "Claude API 호출")
     result = analyze_with_claude(multi_tf_data, pipeline)
     
-    # 3. 메모리 저장 (학습용 고밀도 데이터 저장)
     mem_manager = get_memory()
     mem_manager.get("analyst").add_situation(
         situation=result.get("prompt", "")[:500],
-        advice=result.get("storage_advice", result["raw_text"]), # raw_text 대신 고밀도 데이터 저장
+        advice=result.get("storage_advice", result["raw_text"]),
         meta={"price_at_analysis": price_now} 
     )
     
-    if progress_cb and callable(progress_cb):
-        progress_cb("✅ 분석 완료 및 고밀도 데이터 저장 성공")
-        
+    safe_progress("✅ 분석 완료", "경험 저장 성공")
     return result
