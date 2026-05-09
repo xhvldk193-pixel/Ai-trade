@@ -2047,12 +2047,15 @@ async def _save_account_snapshot():
         if equity <= 0:
             return
         import time as _time
+        _today_pnl = float(acct.get("todayProfitLoss", 0) or 0)
+        _yesterday_equity = equity - _today_pnl
+        _today_pnl_pct = round(_today_pnl / _yesterday_equity * 100, 2) if _yesterday_equity > 0 else 0.0
         snapshot = {
             "observed_ts":    _time.time(),
             "account_equity": equity,
             "available":      float(acct.get("available", 0) or 0),
-            "today_total_pnl": float(acct.get("todayProfitLoss", 0) or 0),
-            "today_pnl_pct":  0,
+            "today_total_pnl": _today_pnl,
+            "today_pnl_pct":  _today_pnl_pct,
         }
         history_path = os.path.join(BASE_DIR, "data", "account_history.jsonl")
         os.makedirs(os.path.dirname(history_path), exist_ok=True)
@@ -2312,7 +2315,7 @@ async def on_startup():
     await _account_stream.start()
     await _macro_snapshot.start()
     await _schedule_manager.start()
-    # asyncio.create_task(_reflection_loop(), name="reflection-loop")  # 매매 체결 시에만 실행
+    asyncio.create_task(_reflection_loop(), name="reflection-loop")  # 6시간 주기 자동 리플렉션
 
     # ── 과거 분석 히스토리 → 메모리 마이그레이션 ──────────────
     # server 싱글턴 초기화 후 실행해야 같은 인스턴스를 공유함
@@ -2686,15 +2689,12 @@ async def market_sentiment_endpoint():
 
 @app.get("/api/account")
 async def account_endpoint():
-    print("[ACCT] auto_trader:", _auto_trader is not None, flush=True)
     """계좌 정보 — Bitget, 실패 시 캐시된 마지막 값 반환."""
     global _cached_account
     if _auto_trader is not None:
         try:
             acct = await asyncio.to_thread(_auto_trader.get_account)
-            print("[ACCT-VAL]", acct, flush=True)
             positions = await asyncio.to_thread(_auto_trader.get_positions)
-            print("[POS]", positions, flush=True)
 
             equity     = float(acct.get("equity",          0) or 0)
             available  = float(acct.get("available",       0) or 0)
@@ -2917,60 +2917,39 @@ async def analysis_history_endpoint(limit: int = 100):
 
 @app.get("/api/performance")
 async def performance_endpoint(days: int = 30):
-    """비트겟 거래 내역 기반 성과 지표 반환."""
-    if _auto_trader is None:
-        return {"error": "자동매매 미설정", "daily": [], "snapshots": []}
-    days = max(1, min(days, 365))
-    try:
-        trades = await asyncio.to_thread(_auto_trader.client.get_trade_history, "BTCUSDT", days)
-    except Exception as e:
-        return {"error": str(e), "daily": [], "snapshots": []}
-
+    """비트겟 거래 내역 + account_history.jsonl 기반 통합 성과 지표 반환."""
+    from datetime import datetime, timezone, timedelta
     from collections import defaultdict
-    import datetime as _dt
     from time_utils import format_kst
 
-    daily_map = defaultdict(lambda: {"pnl": 0.0, "trades": 0, "wins": 0})
-    for t in trades:
+    days = max(1, min(days, 365))
+
+    # ── 1) Bitget API 거래 내역 집계 ──────────────────────────
+    trade_daily: dict = defaultdict(lambda: {"pnl": 0.0, "trades": 0, "wins": 0})
+    total_pnl = 0.0
+    total_trades = 0
+    total_wins = 0
+    if _auto_trader is not None:
         try:
-            ts = _dt.datetime.fromtimestamp(int(t.get("timestamp", 0)) / 1000, tz=_dt.timezone.utc)
-            day_key = format_kst(ts, "%Y-%m-%d")
-            profit = float(t.get("info", {}).get("profit", 0) or 0)
-            daily_map[day_key]["pnl"] += profit
-            daily_map[day_key]["trades"] += 1
-            if profit > 0:
-                daily_map[day_key]["wins"] += 1
+            trades = await asyncio.to_thread(_auto_trader.client.get_trade_history, "BTCUSDT", days)
+            for t in trades:
+                try:
+                    ts = datetime.fromtimestamp(int(t.get("timestamp", 0)) / 1000, tz=timezone.utc)
+                    day_key = format_kst(ts, "%Y-%m-%d")
+                    profit = float(t.get("info", {}).get("profit", 0) or 0)
+                    trade_daily[day_key]["pnl"] += profit
+                    trade_daily[day_key]["trades"] += 1
+                    if profit > 0:
+                        trade_daily[day_key]["wins"] += 1
+                except Exception:
+                    pass
         except Exception:
             pass
 
-    daily = []
-    for day_key in sorted(daily_map.keys()):
-        d = daily_map[day_key]
-        daily.append({
-            "date": day_key,
-            "pnl": round(d["pnl"], 4),
-            "trades": d["trades"],
-            "wins": d["wins"],
-        })
-
-    total_pnl = sum(d["pnl"] for d in daily)
-    total_trades = sum(d["trades"] for d in daily)
-    total_wins = sum(d["wins"] for d in daily)
-
-    return {
-        "daily": daily,
-        "snapshots": [],
-        "total_pnl": round(total_pnl, 4),
-        "total_trades": total_trades,
-        "win_rate": round(total_wins / total_trades * 100, 1) if total_trades > 0 else 0,
-    }
-    from datetime import datetime, timezone, timedelta
-    # 방어적 경계 — 최대 1년, 최소 1일.
-    days = max(1, min(days, 365))
-    history_path = os.path.join(BASE_DIR, "data", "account_history.jsonl")
-    # cutoff 를 먼저 계산하여 파싱 단계에서 바로 필터링 → 메모리 사용량 절감
+    # ── 2) account_history.jsonl 스냅샷 집계 ──────────────────
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
     snapshots: list = []
+    history_path = os.path.join(BASE_DIR, "data", "account_history.jsonl")
     try:
         if os.path.exists(history_path):
             with open(history_path, "r", encoding="utf-8") as f:
@@ -2987,41 +2966,54 @@ async def performance_endpoint(days: int = 30):
     except Exception as exc:
         return {"error": str(exc), "snapshots": [], "daily": []}
 
-    # 일별 집계 (KST 기준 날짜로 그룹)
-    from collections import defaultdict
-    from time_utils import format_kst
-    daily_map: dict = defaultdict(list)
+    snap_daily: dict = defaultdict(list)
     for snap in snapshots:
         try:
             dt = datetime.fromtimestamp(snap["observed_ts"], tz=timezone.utc)
             day_key = format_kst(dt, "%Y-%m-%d")
-            daily_map[day_key].append(snap)
+            snap_daily[day_key].append(snap)
         except Exception:
             pass
 
+    # ── 3) 두 소스 병합해 일별 통계 구성 ──────────────────────
+    all_days = sorted(set(list(trade_daily.keys()) + list(snap_daily.keys())))
     daily = []
-    for day_key in sorted(daily_map.keys()):
-        day_snaps = daily_map[day_key]
-        # 당일 마지막 스냅샷 기준
-        last = day_snaps[-1]
-        first = day_snaps[0]
+    for day_key in all_days:
+        td = trade_daily.get(day_key, {})
+        day_snaps = snap_daily.get(day_key, [])
+        last  = day_snaps[-1] if day_snaps else {}
+        first = day_snaps[0]  if day_snaps else {}
         pnl_vals = [s.get("today_total_pnl") for s in day_snaps if s.get("today_total_pnl") is not None]
         eq_vals  = [s.get("account_equity")  for s in day_snaps if s.get("account_equity")  is not None]
+        day_pnl    = td.get("pnl", last.get("today_total_pnl") or 0.0)
+        day_trades = td.get("trades", 0)
+        day_wins   = td.get("wins", 0)
+        total_pnl    += day_pnl
+        total_trades += day_trades
+        total_wins   += day_wins
         daily.append({
-            "date":           day_key,
-            "pnl":            last.get("today_total_pnl"),
-            "pnl_pct":        last.get("today_pnl_pct"),
-            "equity_start":   first.get("account_equity"),
-            "equity_end":     last.get("account_equity"),
-            "equity_high":    max(eq_vals)  if eq_vals  else None,
-            "equity_low":     min(eq_vals)  if eq_vals  else None,
-            "pnl_high":       max(pnl_vals) if pnl_vals else None,
-            "pnl_low":        min(pnl_vals) if pnl_vals else None,
-            "risk_status":    last.get("risk_status"),
-            "snap_count":     len(day_snaps),
+            "date":         day_key,
+            "pnl":          round(day_pnl, 4) if day_pnl is not None else None,
+            "pnl_pct":      last.get("today_pnl_pct"),
+            "trades":       day_trades,
+            "wins":         day_wins,
+            "equity_start": first.get("account_equity"),
+            "equity_end":   last.get("account_equity"),
+            "equity_high":  max(eq_vals)  if eq_vals  else None,
+            "equity_low":   min(eq_vals)  if eq_vals  else None,
+            "pnl_high":     max(pnl_vals) if pnl_vals else None,
+            "pnl_low":      min(pnl_vals) if pnl_vals else None,
+            "risk_status":  last.get("risk_status"),
+            "snap_count":   len(day_snaps),
         })
 
-    return {"snapshots": snapshots, "daily": daily}
+    return {
+        "daily":        daily,
+        "snapshots":    snapshots,
+        "total_pnl":    round(total_pnl, 4),
+        "total_trades": total_trades,
+        "win_rate":     round(total_wins / total_trades * 100, 1) if total_trades > 0 else 0,
+    }
 
 
 
@@ -3047,7 +3039,6 @@ async def auto_trade_status():
     if _auto_trader is not None:
         try:
             positions = await asyncio.to_thread(_auto_trader.get_positions)
-            print("[POS]", positions, flush=True)
         except Exception as e:
             positions = [{"error": str(e)}]
         try:
