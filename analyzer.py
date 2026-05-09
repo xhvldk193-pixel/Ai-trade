@@ -11,7 +11,6 @@ from macro_fetcher import fetch_macro_context, format_macro_context
 from time_utils import now_kst
 from agents import run_pipeline, PipelineResult
 
-# memory.py 임포트 경로 (배포 환경 호환성 확보)
 try:
     from agents.memory import get_memory
 except ImportError:
@@ -37,49 +36,52 @@ def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] 
     
     context_blob = _build_context_blob(multi_tf_data)
     mem_manager = get_memory() 
-    # 원본 AgentMemories.get_memories_text 호출
     past_memories = mem_manager.get_memories_text("analyst", context_blob[:1000], top_k=3)
     
     debate_block = getattr(pipeline, "combined_block", "") if pipeline else ""
     
-    system_prompt = f"당신은 {PAIR_LABEL} 전문 애널리스트입니다."
+    system_prompt = f"""당신은 {PAIR_LABEL} 전문 애널리스트입니다. 
+토론 내용을 바탕으로 결론을 내리되, 출력은 반드시 아래 형식만 지키세요. 
+형식: [관점 / 확신도 / 진입가 / 손절가 / 목표가 / 레버리지]"""
+
     user_prompt = f"시각: {now_kst()}\n\n{context_blob}\n\n{past_memories}\n\n{debate_block}"
     
     message = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=1000,
+        max_tokens=300, 
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}]
     )
     raw_text = message.content[0].text
     
-    # server.py 호환용 반환 구조
-    return {"raw_text": raw_text, "view": "중립", "confidence": 50, "levels": {}, "prompt": user_prompt}
+    # [학습 보호 로직] 출력은 짧지만, 메모리에는 토론 내용을 포함해 저장
+    storage_advice = f"최종 결론: {raw_text}\n\n[당시 분석 논거]\n{debate_block[:800]}"
+
+    return {
+        "raw_text": raw_text, 
+        "storage_advice": storage_advice,
+        "view": "중립", 
+        "confidence": 50, 
+        "levels": {}, 
+        "prompt": user_prompt
+    }
 
 def run_full_analysis(multi_tf_data: dict, progress_cb: Optional[Callable] = None, **kwargs):
-    """
-    [해결] server.py의 호출 규격(위치 인자 순서)을 완벽히 맞추어 TypeError를 근본적으로 해결.
-    """
-    if progress_cb: progress_cb("📊 분석 및 토론 파이프라인 시작...")
+    if progress_cb: progress_cb("📊 분석 프로세스 시작...")
     
-    try:
-        price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
-    except:
-        price_now = 0.0
+    try: price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
+    except: price_now = 0.0
     
-    # 원본 토론 엔진 실행
     pipeline = run_pipeline(_build_context_blob(multi_tf_data), PAIR_LABEL, "시장 분석", price_now)
-    
-    # 최종 판단 도출
     result = analyze_with_claude(multi_tf_data, pipeline)
     
-    # [데이터 해결] 복기를 위해 분석 시점 가격을 meta에 저장
     mem_manager = get_memory()
+    # advice 항목에 storage_advice를 넣어 나중에 회상 시 논리가 살아있게 함
     mem_manager.get("analyst").add_situation(
         situation=result.get("prompt", "")[:500],
-        advice=result["raw_text"],
+        advice=result.get("storage_advice", result["raw_text"]),
         meta={"price_at_analysis": price_now} 
     )
     
-    if progress_cb: progress_cb("✅ 분석 완료 및 경험 저장 성공")
+    if progress_cb: progress_cb("✅ 분석 및 고밀도 데이터 저장 완료")
     return result
