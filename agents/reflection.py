@@ -1,186 +1,139 @@
 # =============================================
-# Reflection Agent — 사후 결과로 메모리 업데이트 (최종 자동화 버전)
+# Reflection Agent — 특정 시간 경과 후 가격 기반 복기 (완성판)
 # =============================================
 from __future__ import annotations
 
 import os
 import time
 import anthropic
-from dataclasses import dataclass, asdict
+import requests
+from dataclasses import dataclass
 from typing import Optional
+from datetime import datetime, timedelta
 
 # 설정 및 환경 변수
 def _get_client():
-    """Anthropic 클라이언트를 가져옵니다."""
     from agents import get_anthropic_client
     return get_anthropic_client()
 
 from config import CLAUDE_API_KEY
 from .memory import FinancialSituationMemory, get_memory
 
-# 리플렉션에 사용할 모델 설정
 REFLECTION_MODEL = os.getenv("REFLECTION_MODEL", "claude-3-5-sonnet-20240620")
 
-# ── 역할별 시스템 프롬프트 (학습 강화 지침 포함) ────────────────────────────
+# ── 과거 특정 시점의 가격 가져오기 함수 ────────────────────────────
+def get_historical_price(timestamp_unix: float, hours_after: int = 4, symbol: str = "BTCUSDT") -> float:
+    """
+    분석 시점(timestamp_unix)으로부터 특정 시간(hours_after) 후의 가격을 바이낸스에서 가져옵니다.
+    """
+    try:
+        # 분석 시점 + n시간 (밀리초 단위로 변환)
+        target_time = int((timestamp_unix + (hours_after * 3600)) * 1000)
+        
+        # 바이낸스 과거 데이터 API (Klines) 호출
+        url = "https://api.binance.com/api/v3/klines"
+        params = {
+            "symbol": symbol,
+            "interval": "1m",
+            "startTime": target_time,
+            "limit": 1
+        }
+        response = requests.get(url, params=params, timeout=5)
+        data = response.json()
+        
+        if data and len(data) > 0:
+            # 해당 봉의 종가(Close price) 반환
+            return float(data[0][4])
+        return 0.0
+    except Exception as e:
+        print(f"과거 가격 조회 오류: {e}")
+        return 0.0
 
+# ── 역할별 시스템 프롬프트 (전과 동일) ────────────────────────────
 _BASE_RULES = """
 출력 규칙:
 1. 결과 판정: 수익 / 손절 / 미진입 성공 / 미진입 실패(기회비용) 중 하나를 반드시 선택.
-2. 실패 원인: 기술적 오류, 지표 과신, 거시 변수 중 핵심 이유 기술.
-3. 반대 시나리오: 만약 반대 포지션을 잡았다면 어땠을지 1줄 언급.
-4. 마크다운 사용 금지, 일반 텍스트로 작성.
-5. 마지막 줄은 반드시 '다음 체크리스트:' 로 시작하는 요약."""
+2. 분석 기준: '판단 시점으로부터 약 4시간 뒤'의 결과를 바탕으로 당시 판단의 합리성을 평가.
+3. 마크다운 사용 금지, 일반 텍스트로 작성.
+4. 마지막 줄은 반드시 '다음 체크리스트:' 로 시작하는 요약."""
 
-_HINDSIGHT_GUARD = """
-결과론 금지: 사후 가격을 안다고 해서 '당시 알 수 있었던 신호'라고 치부하지 마세요. 
-당시 데이터 기준으로 판단이 합리적이었는지만 평가하세요."""
+_HINDSIGHT_GUARD = "결과론 금지: 사후 가격을 안다고 해서 당시 판단을 무조건 틀렸다고 하지 마세요."
 
-ROLE_REFLECTION_SYSTEMS: dict[str, str] = {
-    "analyst": f"""당신은 BTC 애널리스트 코치입니다. {_HINDSIGHT_GUARD} {_BASE_RULES}""",
-    "bull": f"""당신은 Bull Researcher 코치입니다. 상방 근거를 재검토하세요. {_BASE_RULES}""",
-    "bear": f"""당신은 Bear Researcher 코치입니다. 하방 근거를 재검토하세요. {_BASE_RULES}""",
-    "judge": f"""당신은 심판 판정 코치입니다. 판정이 적절했는지 평가하세요. {_BASE_RULES}""",
-    "aggressive": f"""공격적 리스크 코치입니다. 불필요한 리스크였는지 확인하세요. {_BASE_RULES}""",
-    "conservative": f"""보수적 리스크 코치입니다. 놓친 기회를 인정하세요. {_BASE_RULES}""",
-    "neutral": f"""중립 리스크 코치입니다. 전략의 실효성을 평가하세요. {_BASE_RULES}""",
+ROLE_REFLECTION_SYSTEMS = {
+    "analyst": f"당신은 BTC 애널리스트 코치입니다. {_HINDSIGHT_GUARD} {_BASE_RULES}",
+    # ... 다른 역할들도 이 프롬프트를 공유하거나 개별 설정 가능
 }
 
-DEFAULT_REFLECTION_SYSTEM = ROLE_REFLECTION_SYSTEMS["analyst"]
-
-# ── 유저 프롬프트 템플릿 ───────────────────────────────────
-
-REFLECTION_USER_TEMPLATE = """[과거 판단 시점] {past_ts}
-[역할] {role}
-[판단 당시 상황 요약]
-{past_situation}
-
-[판단 당시 발언/조언]
-{past_advice}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[사후 가격 변화]
-기준가: ${price_then:,.2f}
-현재가: ${price_now:,.2f}
-변화율: {pct_change:+.2f}% ({direction})
-경과 시간: {elapsed_label}
-{high_low_block}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{missed_block}위 정보를 바탕으로 리플렉션을 작성하세요.
-{missed_instruction}마지막 줄은 반드시 '다음 체크리스트:' 로 시작하세요.
-"""
-
-@dataclass
-class ReflectionResult:
-    timestamp: str
-    role: str
-    price_then: float
-    price_now: float
-    pct_change: float
-    reflection_text: str
-    updated: bool
-    error: Optional[str] = None
-
-def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
-    """Claude API를 호출하여 답변을 받습니다."""
-    msg = client.messages.create(
-        model=REFLECTION_MODEL,
-        max_tokens=800,
-        system=[{"type": "text", "text": system}],
-        messages=[{"role": "user", "content": user}],
-    )
-    return msg.content[0].text.strip()
-
-def _elapsed_label(seconds: float) -> str:
-    if seconds < 3600: return f"{seconds / 60:.0f}분"
-    if seconds < 86400: return f"{seconds / 3600:.1f}시간"
-    return f"{seconds / 86400:.1f}일"
-
-def reflect_for_role(
-    role: str,
-    record_ts: str,
-    situation: str,
-    advice: str,
-    price_then: float,
-    price_now: float,
-    elapsed_seconds: float,
-    memory: Optional[FinancialSituationMemory] = None,
-    price_high: Optional[float] = None,
-    price_low: Optional[float] = None,
-) -> ReflectionResult:
-    """개별 기록에 대해 리플렉션을 실행합니다."""
-    if memory is None: memory = get_memory(role)
-    if not CLAUDE_API_KEY:
-        return ReflectionResult(record_ts, role, price_then, price_now, 0.0, "", False, "API_KEY_MISSING")
-
-    pct = ((price_now - price_then) / price_then * 100.0) if price_then else 0.0
+# ── 복기 수행 함수 ───────────────────────────────────
+def reflect_for_role(role, record_ts, situation, advice, price_then, price_after, hours, memory):
+    client = _get_client()
+    pct = ((price_after - price_then) / price_then * 100.0) if price_then else 0.0
     direction = "상승" if pct > 0 else "하락"
 
-    high_low_block = f"구간 최고가: ${price_high:,.2f} | 구간 최저가: ${price_low:,.2f}\n" if price_high else ""
-    
-    # 메타 정보 확인
-    _rec = next((r for r in memory.records if r.timestamp == record_ts), None)
-    _meta = _rec.meta if _rec else {}
-    _conf = _meta.get("confidence", 100)
-    
-    missed_block = ""
-    missed_instruction = ""
-    if _conf < 65: # 확신도가 낮아 진입 안 한 케이스
-        missed_block = "⚠️ 이 기록은 진입 거부된 케이스입니다. 기회비용을 분석하세요.\n"
-        missed_instruction = "관망 판단이 자산을 지켰는지, 아니면 큰 수익을 놓쳤는지 반드시 평가하세요.\n"
+    # 유저 프롬프트 구성
+    prompt = f"""
+[과거 판단 시점] {record_ts}
+[역할] {role}
+[당시 상황] {situation}
+[당시 조언] {advice}
 
-    system_prompt = ROLE_REFLECTION_SYSTEMS.get(role, DEFAULT_REFLECTION_SYSTEM)
-    prompt = REFLECTION_USER_TEMPLATE.format(
-        past_ts=record_ts, role=role, past_situation=situation, past_advice=advice,
-        price_then=price_then, price_now=price_now, pct_change=pct, direction=direction,
-        elapsed_label=_elapsed_label(elapsed_seconds), high_low_block=high_low_block,
-        missed_block=missed_block, missed_instruction=missed_instruction
-    )
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[판단 {hours}시간 후 결과]
+기준 가격: ${price_then:,.2f}
+{hours}시간 후 가격: ${price_after:,.2f}
+변화율: {pct:+.2f}% ({direction})
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+이 결과를 바탕으로 리플렉션을 작성하세요.
+"""
 
+    system_prompt = ROLE_REFLECTION_SYSTEMS.get(role, ROLE_REFLECTION_SYSTEMS["analyst"])
+    
     try:
-        reflection_text = _call_llm(_get_client(), system_prompt, prompt)
-        outcome_block = f"[사후 {_elapsed_label(elapsed_seconds)}] {reflection_text}"
-        updated = memory.update_outcome(record_ts, outcome_block)
-        return ReflectionResult(record_ts, role, price_then, price_now, pct, reflection_text, updated)
-    except Exception as exc:
-        return ReflectionResult(record_ts, role, price_then, price_now, pct, "", False, str(exc))
+        msg = client.messages.create(
+            model=REFLECTION_MODEL,
+            max_tokens=800,
+            system=[{"type": "text", "text": system_prompt}],
+            messages=[{"role": "user", "content": prompt}]
+        )
+        reflection_text = msg.content[0].text.strip()
+        
+        outcome_block = f"[{hours}시간 후 복기] {reflection_text}"
+        memory.update_outcome(record_ts, outcome_block)
+        return True
+    except Exception as e:
+        print(f"복기 도중 오류: {e}")
+        return False
 
 def reflect_all():
-    """모든 역할의 메모리를 정리하고 리플렉션을 수행하는 통합 입구입니다."""
+    """모든 역할에 대해 '4시간 뒤' 가격을 기준으로 복기를 수행합니다."""
     roles = ["analyst", "bull", "bear", "judge", "aggressive", "conservative", "neutral"]
+    HOURS_AFTER = 4 # 4시간 후를 기준으로 설정
     
     for role in roles:
         memory = get_memory(role)
         if not memory: continue
         
-        # 1. 결과가 없는(리플렉션 대기 중인) 기록 찾기
-        pending = [r for r in memory.records if not r.outcome or len(r.outcome.strip()) == 0]
+        # 결과가 없는 기록 중, 발생한 지 4시간이 넘은 기록들만 대상 (과거 데이터를 가져와야 하므로)
+        now_unix = time.time()
+        pending = [
+            r for r in memory.records 
+            if (not r.outcome) and (now_unix - r.timestamp_unix > HOURS_AFTER * 3600)
+        ]
+        
+        print(f"[{role}] {len(pending)}개의 {HOURS_AFTER}시간 경과 기록 복기 시작...")
         
         for rec in pending:
-            # [수정 부분] pass를 지우고 실제 복기 로직을 연결했습니다.
-            try:
-                # 분석 당시 가격을 메타데이터에서 가져옵니다.
-                price_then = rec.meta.get("price_at_analysis", 0)
-                # 현재가는 일단 0으로 두거나 실제 API 연동이 필요하지만, 
-                # 여기서는 구조적으로 Claude가 기록을 읽고 판단하게끔 호출합니다.
-                price_now = 0.0 
-                
-                reflect_for_role(
-                    role=role,
-                    record_ts=rec.timestamp,
-                    situation=rec.situation,
-                    advice=rec.advice,
-                    price_then=price_then,
-                    price_now=price_now,
-                    elapsed_seconds=time.time() - rec.timestamp_unix,
-                    memory=memory
-                )
-            except:
-                continue
+            price_then = rec.meta.get("price_at_analysis", 0)
+            # 바이낸스에서 정확히 '그때부터 4시간 뒤'의 가격을 가져옴
+            price_after = get_historical_price(rec.timestamp_unix, hours_after=HOURS_AFTER)
+            
+            if price_then > 0 and price_after > 0:
+                reflect_for_role(role, rec.timestamp, rec.situation, rec.advice, 
+                                 price_then, price_after, HOURS_AFTER, memory)
+                print(f"  - {rec.timestamp} (4시간 후 가격: {price_after}) 복기 완료.")
 
-        # 2. 리플렉션이 끝난 후 3일 지난 쓰레기 데이터 청소
-        deleted = memory.cleanup_old_no_outcome_records(days_threshold=3)
-        if deleted > 0:
-            print(f"[{role}] {deleted}개의 무의미한 기록 정제 완료.")
+        # 3일 지난 쓰레기 데이터 정리
+        memory.cleanup_old_no_outcome_records(days_threshold=3)
 
 if __name__ == "__main__":
     reflect_all()
