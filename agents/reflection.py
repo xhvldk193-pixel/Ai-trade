@@ -450,6 +450,27 @@ def reflect_for_role(
     )
     updated = memory.update_outcome(record_ts, outcome_block)
 
+    # 체크리스트 / 반복실수 항목을 meta 에 구조화 저장
+    # BM25 매칭 시 situation 검색 품질 향상 + 다음 분석 프롬프트에서 직접 활용 가능
+    try:
+        _checklist_items: list[str] = []
+        _avoid_pattern = ""
+        for _line in reflection_text.splitlines():
+            _s = _line.strip()
+            if _s.startswith("다음 체크리스트:"):
+                # "/ " 구분자로 분리해 개별 항목 저장
+                _raw = _s[len("다음 체크리스트:"):].strip()
+                _checklist_items = [x.strip() for x in _raw.split("/") if x.strip()]
+            if _s.startswith("반복 실수 금지:"):
+                _avoid_pattern = _s[len("반복 실수 금지:"):].strip()
+        if _checklist_items or _avoid_pattern:
+            memory.update_meta(record_ts, {
+                "checklist":     _checklist_items,
+                "avoid_pattern": _avoid_pattern,
+            })
+    except Exception:
+        pass  # meta 저장 실패해도 리플렉션 결과는 유지
+
     return ReflectionResult(
         timestamp=record_ts,
         role=role,

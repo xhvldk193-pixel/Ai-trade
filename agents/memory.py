@@ -221,6 +221,23 @@ class FinancialSituationMemory:
                     return True
         return False
 
+    def update_meta(self, timestamp: str, meta_patch: dict) -> bool:
+        """
+        특정 timestamp 의 meta 를 부분 업데이트한다.
+        기존 meta 키는 유지하고 meta_patch 의 키만 덮어씀.
+        체크리스트·반복실수 패턴 저장에 사용.
+        """
+        norm_target = self._norm_ts(timestamp)
+        with self._lock:
+            for r in self._records:
+                if self._norm_ts(r.timestamp) == norm_target:
+                    if r.meta is None:
+                        r.meta = {}
+                    r.meta.update(meta_patch)
+                    self._rewrite_disk()
+                    return True
+        return False
+
     @staticmethod
     def _jaccard(a: list[str], b: list[str]) -> float:
         """토큰 집합 간 Jaccard 유사도 (0~1)."""
@@ -400,8 +417,25 @@ def format_memory_block(memories: list[dict]) -> str:
         situation = (rec.get("situation") or "").strip()
         advice = (rec.get("advice") or "").strip()
         outcome = (rec.get("outcome") or "").strip()
+        meta = rec.get("meta") or {}
+        # meta에 구조화 저장된 체크리스트/반복실수 (reflection 단계에서 파싱 저장)
+        _meta_checklist = meta.get("checklist") or []
+        _meta_avoid     = meta.get("avoid_pattern", "")
+
+        # judge_verdict / judge 핵심근거 메타 추출 — 판정 패턴 학습 강화
+        meta = rec.get("meta") or {}
+        _judge_v    = meta.get("judge_verdict", "")
+        _judge_bull = meta.get("judge_bull_key", "")
+        _judge_bear = meta.get("judge_bear_key", "")
 
         lines.append(f"\n— 사례 {i} · {ts} · 유사도 {score:.2f} —")
+        if _judge_v:
+            _jl = f"Judge 판정: {_judge_v}"
+            if _judge_bull:
+                _jl += f" (Bull: {_judge_bull[:60]}"
+                _jl += f" / Bear: {_judge_bear[:60]}" if _judge_bear else ""
+                _jl += ")"
+            lines.append(f"  ⚖ {_jl}")
         if situation:
             # 프롬프트 주입용 — 300자로 압축 (UI는 state.memories[] 직접 읽음)
             snippet = situation if len(situation) <= 300 else situation[:300] + " …"

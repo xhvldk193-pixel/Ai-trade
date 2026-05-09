@@ -329,7 +329,7 @@ def run_pipeline(
         if progress_cb:
             progress_cb("memory", "과거 유사 상황 검색 중")
         try:
-            memories = memory.get_memories(current_situation, top_k=3)
+            memories = memory.get_memories(current_situation, top_k=4)
             if format_memory_block is not None:
                 memory_block = format_memory_block(memories)
         except Exception as exc:

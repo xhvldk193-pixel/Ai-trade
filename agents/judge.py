@@ -249,7 +249,7 @@ def run_judge(
                 break
         _query = " | ".join(_kw_lines) if _kw_lines else context_blob[:300]
     if agent_memories is not None:
-        past = agent_memories.recall("judge", _query, top_k=2)
+        past = agent_memories.recall("judge", _query, top_k=4)
 
     # context_blob 전체 대신 핵심 요약만 주입 (토큰 절약 + 집중도 향상)
     context_summary = _make_context_summary(context_blob)

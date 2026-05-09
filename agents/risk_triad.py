@@ -314,17 +314,27 @@ def run_risk_triad(
                         f"{label} 라운드 {r + 1}/{rounds} 분석 중",
                     )
 
-                opponent_block_text = risk_opponent_block(
-                    aggressive_last=last["aggressive"],
-                    conservative_last=last["conservative"],
-                    neutral_last=last["neutral"],
-                    speaking_side=side,
-                )
+                # neutral은 독립 발언 — aggressive/conservative 편향에 오염되지 않도록
+                # 첫 라운드에서 neutral 차례일 때는 앞 발언 미노출
+                if side == "neutral" and r == 0:
+                    opponent_block_text = risk_opponent_block(
+                        aggressive_last="",
+                        conservative_last="",
+                        neutral_last="",
+                        speaking_side=side,
+                    )
+                else:
+                    opponent_block_text = risk_opponent_block(
+                        aggressive_last=last["aggressive"],
+                        conservative_last=last["conservative"],
+                        neutral_last=last["neutral"],
+                        speaking_side=side,
+                    )
 
                 # 역할별 메모리 회상 (첫 라운드에만)
                 past = ""
                 if r == 0 and agent_memories is not None:
-                    past = agent_memories.recall(side, _query, top_k=2)
+                    past = agent_memories.recall(side, _query, top_k=4)
 
                 # 이번 라운드에서 본인 외 누군가 발언이 있었는지 → 반박 지시
                 has_opponent = any(v for k, v in last.items() if k != side)

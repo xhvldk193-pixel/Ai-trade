@@ -199,6 +199,26 @@ def _tf_tags(tf: str, df) -> list[str]:
             pos = "하위_강" if diff_pct < -3 else "하위"
         tags.append(f"trend_{tf}:{pos}")
 
+    # 거래량 이상 감지 — 평균 대비 1.5배 이상 시 breakout 신뢰도에 활용
+    vol_cur  = _safe_get(last, "volume")
+    # 최근 20봉 평균 거래량: DataFrame 으로부터 직접 계산
+    try:
+        _vol_series = df["volume"].iloc[-21:-1]  # 직전 20봉 (현재봉 제외)
+        vol_avg = float(_vol_series.mean()) if len(_vol_series) >= 5 else None
+    except Exception:
+        vol_avg = None
+    if vol_cur is not None and vol_avg and vol_avg > 0:
+        vol_ratio = vol_cur / vol_avg
+        if vol_ratio >= 2.0:
+            vol_tag = "급증"
+        elif vol_ratio >= 1.5:
+            vol_tag = "증가"
+        elif vol_ratio >= 0.7:
+            vol_tag = "보합"
+        else:
+            vol_tag = "감소"
+        tags.append(f"vol_{tf}:{vol_tag}")
+
     return tags
 
 
