@@ -2478,8 +2478,8 @@ async def reflect_endpoint():
     메모리에 누적된 과거 기록들 중 outcome 이 비어 있는 것들을
     백그라운드에서 비동기 처리 — 타임아웃 방지.
     """
-    asyncio.create_task(_run_reflect_background())
-    return {"ok": True, "message": "리플렉션 백그라운드 시작됨", "processed": 0}
+    result = await _run_reflect_background()
+    return result if isinstance(result, dict) else {"ok": True, "processed": 0}
 
 
 async def _run_reflect_background():
@@ -2517,7 +2517,7 @@ async def _run_reflect_background():
     # ── Analyst 메모리 리플렉션 ─────────────────────────
     analyst_memory = _get_memory("analyst")
     pending = analyst_memory.list_pending_reflections(min_age_seconds=7200.0, limit=5)
-    print(f"[reflect-bg] analyst 전체={analyst_memory.size()}건 / pending={len(pending)}건", flush=True)
+    print(f"[reflect-bg] analyst 전체={analyst_memory.size()}건 / analyst pending={len(pending)}건", flush=True)
 
     for rec in pending:
         try:
@@ -2622,8 +2622,15 @@ async def _run_reflect_background():
 
     # 전체 기록 수 (outcome 유무 무관)
     total_records = analyst_memory.size()
-    # 아직 리플렉션이 안 된 기록 수 (outcome 비어있는 것)
+    # 아직 리플렉션이 안 된 기록 수 — analyst + 전체 에이전트 역할 합산
     still_pending = len(analyst_memory.list_pending_reflections(min_age_seconds=0, limit=9999))
+    if _get_agent_memories is not None:
+        try:
+            _am = _get_agent_memories()
+            for _role in _AGENT_ROLES_FOR_REFLECT:
+                still_pending += len(_am.get(_role).list_pending_reflections(min_age_seconds=0, limit=9999))
+        except Exception:
+            pass
 
     return {
         "ok": True,
@@ -3121,6 +3128,26 @@ async def reset_migration():
         return {"ok": True, "message": "플래그 파일 없음 — 이미 초기화 상태"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+@app.get("/api/memory")
+async def memory_endpoint(top_k: int = 3):
+    """analyst 메모리 최신 기록 반환 — 리플렉션 완료 후 UI 갱신용."""
+    if _get_memory is None:
+        return {"ok": False, "memories": []}
+    try:
+        mem = _get_memory("analyst")
+        all_recs = mem.list_records()
+        recent = list(reversed(all_recs))[:top_k]
+        records = [{"record": {
+            "timestamp": r.timestamp,
+            "situation": r.situation,
+            "advice": r.advice,
+            "outcome": r.outcome,
+            "meta": r.meta,
+        }, "score": 0} for r in recent]
+        return {"ok": True, "memories": records}
+    except Exception as e:
+        return {"ok": False, "memories": [], "error": str(e)}
 
 @app.get("/")
 async def root():
