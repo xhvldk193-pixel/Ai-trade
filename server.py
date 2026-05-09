@@ -2294,11 +2294,15 @@ async def _migrate_history_to_memory():
                 )
                 if _rec:
                     # 원래 분석 타임스탬프로 교체 (4시간 경과 판정을 위해)
+                    # ※ 반드시 _norm_ts 로 정규화해 저장 — 형식 불일치로 update_outcome 실패 방지
                     if _ts:
-                        _rec.timestamp = _ts
+                        _norm = _mem._norm_ts(_ts)
+                        _rec.timestamp = _norm if _norm else _ts
                         _mem._rewrite_disk()
+                        _existing.add(_norm if _norm else _ts)
+                    else:
+                        _existing.add(_rec.timestamp)
                     _added += 1
-                    _existing.add(_ts)
         if _added > 0:
             print(f"[migration] 과거 분석 {_added}건 메모리 임포트 완료", flush=True)
         else:
@@ -2536,7 +2540,12 @@ async def _run_reflect_background():
 
     for rec in pending:
         try:
-            ts = _dt.datetime.fromisoformat(rec.timestamp.replace("Z", "+00:00"))
+            _raw = rec.timestamp.strip().replace(" ", "T")
+            if _raw.endswith("Z"):
+                _raw = _raw[:-1] + "+00:00"
+            ts = _dt.datetime.fromisoformat(_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=_dt.timezone.utc)
         except Exception:
             continue
         elapsed = (now_utc - ts).total_seconds()
@@ -2596,7 +2605,12 @@ async def _run_reflect_background():
                 role_pending = role_mem.list_pending_reflections(min_age_seconds=7200.0, limit=3)
                 for rec in role_pending:
                     try:
-                        ts = _dt.datetime.fromisoformat(rec.timestamp.replace("Z", "+00:00"))
+                        _raw = rec.timestamp.strip().replace(" ", "T")
+                        if _raw.endswith("Z"):
+                            _raw = _raw[:-1] + "+00:00"
+                        ts = _dt.datetime.fromisoformat(_raw)
+                        if ts.tzinfo is None:
+                            ts = ts.replace(tzinfo=_dt.timezone.utc)
                     except Exception:
                         continue
                     elapsed = (now_utc - ts).total_seconds()
