@@ -1,11 +1,8 @@
-# =============================================
-# Financial Situation Memory (BM25 기반 + 자동 정제)
-# =============================================
 import json
 import os
 import re
-import time
 import threading
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +17,7 @@ except Exception:
 
 _THIS_DIR = Path(__file__).resolve().parent
 _PROJECT_DIR = _THIS_DIR.parent
-DEFAULT_MEMORY_DIR = Path(os.getenv("MEMORY_DIR", _PROJECT_DIR / "data" / "memory"))
+DEFAULT_MEMORY_DIR = Path(os.getenv("MEMORY_DIR", str(_PROJECT_DIR / "data" / "memory")))
 
 @dataclass
 class MemoryRecord:
@@ -28,64 +25,49 @@ class MemoryRecord:
     timestamp_unix: float
     situation: str
     advice: str
-    outcome: str
-    meta: dict
+    outcome: str = ""
+    meta: dict = None
 
 class FinancialSituationMemory:
-    def __init__(self, role: str, memory_dir: Path = DEFAULT_MEMORY_DIR):
-        self.role = role
-        self.file_path = memory_dir / f"{role}.jsonl"
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        self.records: List[MemoryRecord] = []
-        self.bm25 = None
+    def __init__(self, name: str, memory_dir: Optional[Path] = None):
+        self.name = name
+        self.memory_dir = memory_dir or DEFAULT_MEMORY_DIR
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self.path = self.memory_dir / f"{name}.jsonl"
         self._lock = threading.Lock()
+        self.records: List[MemoryRecord] = []
         self._load()
 
     def _load(self):
-        if not self.file_path.exists(): return
-        with open(self.file_path, "r", encoding="utf-8") as f:
+        if not self.path.exists(): return
+        with self.path.open("r", encoding="utf-8") as f:
             for line in f:
                 if not line.strip(): continue
-                try:
-                    d = json.loads(line)
-                    self.records.append(MemoryRecord(**d))
-                except: continue
-        self._rebuild_bm25()
-
-    def _rebuild_bm25(self):
-        if not _BM25_AVAILABLE or not self.records: return
-        tokenized_corpus = [self._tokenize(r.situation) for r in self.records]
-        self.bm25 = BM25Okapi(tokenized_corpus)
-
-    def _tokenize(self, text: str):
-        return re.findall(r'[\w\d]+', text.lower())
+                d = json.loads(line)
+                if "timestamp_unix" not in d:
+                    d["timestamp_unix"] = time.time()
+                self.records.append(MemoryRecord(**d))
 
     def _save(self):
-        with open(self.file_path, "w", encoding="utf-8") as f:
+        with self.path.open("w", encoding="utf-8") as f:
             for r in self.records:
                 f.write(json.dumps(asdict(r), ensure_ascii=False) + "\n")
 
     def add_situation(self, situation: str, advice: str, outcome: str = "", meta: dict = None):
         with self._lock:
-            # 최근 5개와 동일 상황이면 중복 방지
-            for r in self.records[-5:]:
-                if r.situation == situation: return None
-            
-            now = datetime.now(timezone.utc)
             rec = MemoryRecord(
-                timestamp=now.isoformat(),
-                timestamp_unix=now.timestamp(),
-                situation=situation,
-                advice=advice,
-                outcome=outcome,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp_unix=time.time(),
+                situation=situation.strip(),
+                advice=advice.strip(),
+                outcome=outcome.strip(),
                 meta=meta or {}
             )
             self.records.append(rec)
             self._save()
-            self._rebuild_bm25()
             return rec
 
-    def update_outcome(self, timestamp: str, outcome: str):
+    def update_outcome(self, timestamp: str, outcome: str) -> bool:
         with self._lock:
             for r in self.records:
                 if r.timestamp == timestamp:
@@ -95,34 +77,18 @@ class FinancialSituationMemory:
         return False
 
     def cleanup_old_no_outcome_records(self, days_threshold=3):
-        """
-        결과(outcome)가 없는 3일 이상 된 노이즈 데이터를 삭제합니다.
-        손절/수익/미진입 복기 등 결과가 기록된 '학습 데이터'는 절대 삭제하지 않습니다.
-        """
+        """결과(outcome)가 없는 3일 이상 된 노이즈 데이터만 삭제"""
         now = time.time()
-        threshold_seconds = days_threshold * 24 * 3600
-        initial_count = len(self.records)
-        
+        threshold = days_threshold * 24 * 3600
         with self._lock:
+            initial_count = len(self.records)
             self.records = [
-                rec for rec in self.records 
-                if (rec.outcome and len(rec.outcome.strip()) > 0) or (now - rec.timestamp_unix < threshold_seconds)
+                r for r in self.records 
+                if (r.outcome and len(r.outcome.strip()) > 0) or (now - r.timestamp_unix < threshold)
             ]
             if len(self.records) != initial_count:
-                self._rebuild_bm25()
                 self._save()
         return initial_count - len(self.records)
 
-    def get_memories(self, situation: str, top_k: int = 3):
-        if not self.bm25 or not self.records: return []
-        query = self._tokenize(situation)
-        scores = self.bm25.get_scores(query)
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-        return [{"record": asdict(self.records[i]), "score": scores[i]} for i in top_indices if scores[i] > 0]
-
-# Singleton-like getter
-_memories = {}
-def get_memory(role: str) -> FinancialSituationMemory:
-    if role not in _memories:
-        _memories[role] = FinancialSituationMemory(role)
-    return _memories[role]
+def get_memory(name: str = "analyst") -> FinancialSituationMemory:
+    return FinancialSituationMemory(name)
