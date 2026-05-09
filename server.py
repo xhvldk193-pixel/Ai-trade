@@ -3160,6 +3160,153 @@ async def memory_endpoint(top_k: int = 3):
     except Exception as e:
         return {"ok": False, "memories": [], "error": str(e)}
 
+
+@app.get("/api/memory/stats")
+async def memory_stats_endpoint():
+    """역할별 메모리 건수 통계 반환."""
+    if _get_memory is None:
+        return {"ok": False, "stats": {}}
+    try:
+        from agents.memory import AGENT_ROLES, get_agent_memories as _gam
+        stats = {}
+        analyst_mem = _get_memory("analyst")
+        all_analyst = analyst_mem.list_records()
+        stats["analyst"] = {
+            "total": len(all_analyst),
+            "with_outcome": sum(1 for r in all_analyst if r.outcome),
+            "without_outcome": sum(1 for r in all_analyst if not r.outcome),
+        }
+        try:
+            am = _gam()
+            for role in AGENT_ROLES:
+                if role == "analyst":
+                    continue
+                recs = am.get(role).list_records()
+                stats[role] = {
+                    "total": len(recs),
+                    "with_outcome": sum(1 for r in recs if r.outcome),
+                    "without_outcome": sum(1 for r in recs if not r.outcome),
+                }
+        except Exception:
+            pass
+        total = sum(s["total"] for s in stats.values())
+        return {"ok": True, "stats": stats, "grand_total": total}
+    except Exception as e:
+        return {"ok": False, "stats": {}, "error": str(e)}
+
+
+@app.post("/api/memory/clean")
+async def memory_clean_endpoint(request: Request):
+    """
+    메모리 클리너.
+    body: { "role": "all"|"analyst"|..., "threshold": 0.82, "cap": 150, "dry_run": false }
+    """
+    if _get_memory is None:
+        return {"ok": False, "error": "메모리 모듈 미로드"}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    target_role = body.get("role", "all")
+    threshold   = float(body.get("threshold", 0.82))
+    cap         = int(body.get("cap", 150))
+    dry_run     = bool(body.get("dry_run", False))
+
+    import re as _re
+    import json as _json
+    import shutil as _shutil
+
+    _TOKEN_RE2 = _re.compile(r"[A-Za-z가-힣0-9%]+")
+
+    def _tok(text):
+        return [t.lower() for t in _TOKEN_RE2.findall(text or "")]
+
+    def _jac(a, b):
+        if not a or not b:
+            return 0.0
+        sa, sb = set(a), set(b)
+        return len(sa & sb) / len(sa | sb)
+
+    def _clean(records, thr, role_cap):
+        MIN_LEN = 80
+        records = [r for r in records if r.timestamp and len((r.advice or "").strip()) >= MIN_LEN]
+        records = sorted(records, key=lambda r: (bool(r.outcome), len(r.outcome or "")), reverse=True)
+        kept, kept_toks, dup_rm = [], [], 0
+        for rec in records:
+            tok = _tok(rec.situation)
+            if any(_jac(tok, kt) >= thr for kt in kept_toks):
+                dup_rm += 1
+            else:
+                kept.append(rec)
+                kept_toks.append(tok)
+        kept.sort(key=lambda r: r.timestamp)
+        cap_rm = 0
+        if len(kept) > role_cap:
+            w = [r for r in kept if r.outcome]
+            wo = [r for r in kept if not r.outcome]
+            kept = (w + wo[-max(0, role_cap - len(w)):]
+                    if len(w) < role_cap else w[-role_cap:])
+            kept.sort(key=lambda r: r.timestamp)
+            cap_rm = (len(w) + len(wo)) - len(kept)
+        return kept, dup_rm, cap_rm
+
+    def _load(path):
+        recs = []
+        if not path.exists():
+            return recs
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    from agents.memory import MemoryRecord
+                    recs.append(MemoryRecord.from_dict(_json.loads(line)))
+                except Exception:
+                    continue
+        return recs
+
+    def _save(path, records):
+        tmp = path.with_suffix(".jsonl.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            for r in records:
+                f.write(_json.dumps(r.to_dict(), ensure_ascii=False) + "\n")
+        tmp.replace(path)
+
+    from agents.memory import DEFAULT_MEMORY_DIR, AGENT_ROLES as _ALL_ROLES
+    roles_to_clean = list(_ALL_ROLES) if target_role == "all" else [target_role]
+    results = {}
+    grand_before = grand_after = 0
+
+    for role in roles_to_clean:
+        path = DEFAULT_MEMORY_DIR / f"{role}.jsonl"
+        records = _load(path)
+        before = len(records)
+        grand_before += before
+        if before == 0:
+            results[role] = {"before": 0, "after": 0, "removed": 0}
+            continue
+        cleaned, dup_rm, cap_rm = _clean(records, threshold, cap)
+        after = len(cleaned)
+        grand_after += after
+        if not dry_run and path.exists() and before != after:
+            _shutil.copy2(path, path.with_suffix(".jsonl.bak"))
+            _save(path, cleaned)
+            try:
+                mem_inst = _get_memory(role)
+                with mem_inst._lock:
+                    mem_inst._records = cleaned
+            except Exception:
+                pass
+        results[role] = {"before": before, "after": after, "removed": before - after,
+                         "removed_dup": dup_rm, "removed_cap": cap_rm}
+
+    return {"ok": True, "dry_run": dry_run,
+            "grand_before": grand_before, "grand_after": grand_after,
+            "grand_removed": grand_before - grand_after, "roles": results}
+
+
 @app.get("/")
 async def root():
     html_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
