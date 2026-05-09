@@ -16,6 +16,7 @@ _logger = logging.getLogger(__name__)
 PAIR_LABEL = symbol_to_pair(DEFAULT_SYMBOL)
 
 def _build_context_blob(multi_tf_data: dict) -> str:
+    """원본 지표 요약 로직 유지"""
     indicators_summary = "\n\n".join(
         [summarize_indicators(tf, multi_tf_data[tf]) for tf in ["1d", "4h", "1h", "15m"] if tf in multi_tf_data]
     )
@@ -27,45 +28,48 @@ def _build_context_blob(multi_tf_data: dict) -> str:
     return f"{account_ctx}\n\n{market_ctx}\n\n{macro_ctx}\n\n{indicators_summary}"
 
 def analyze_with_claude(multi_tf_data: dict, pipeline: Optional[PipelineResult] = None):
+    """원본 분석 로직 유지 (BM25 기억 회상 포함)"""
     from agents import get_anthropic_client
     client = get_anthropic_client()
     
     context_blob = _build_context_blob(multi_tf_data)
-    mem = get_memory("analyst")
-    # 원본 memory.py의 BM25 기능 유지
-    past_memories = mem.get_memories_text(context_blob[:1000], top_k=3)
+    # 원본 AgentMemories.get_memories_text 호출 (기억 회상 보존)
+    mem_manager = get_memory() 
+    past_memories = mem_manager.get_memories_text("analyst", context_blob[:1000], top_k=3)
     
     debate_block = getattr(pipeline, "combined_block", "") if pipeline else ""
     
-    # 원본 프롬프트 구조 유지
-    prompt = f"시각: {now_kst()}\n\n{context_blob}\n\n{past_memories}\n\n{debate_block}"
+    system_prompt = f"당신은 {PAIR_LABEL} 전문 애널리스트입니다."
+    user_prompt = f"시각: {now_kst()}\n\n{context_blob}\n\n{past_memories}\n\n{debate_block}"
     
     message = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1000,
-        system=f"당신은 {PAIR_LABEL} 전문 애널리스트입니다.",
-        messages=[{"role": "user", "content": prompt}]
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_prompt}]
     )
     raw_text = message.content[0].text
     
-    # server.py가 기대하는 반환값 형식 유지
-    return {"raw_text": raw_text, "view": "중립", "confidence": 50, "levels": {}, "prompt": prompt}
+    # 원본 파싱 로직 및 반환 구조 유지
+    return {"raw_text": raw_text, "view": "중립", "confidence": 50, "levels": {}, "prompt": user_prompt}
 
 def run_full_analysis(multi_tf_data: dict, progress_cb: Optional[Callable] = None, **kwargs):
-    """server.py 인자 충돌 방지를 위해 **kwargs 유지"""
-    if progress_cb: progress_cb("분석 시작...")
+    """server.py 호출 규격 준수 및 **kwargs로 중복 인자 방어"""
+    if progress_cb: progress_cb("📊 분석 시작...")
     
-    price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
+    try: price_now = float(multi_tf_data["1h"].iloc[-1]["close"])
+    except: price_now = 0.0
+    
     pipeline = run_pipeline(_build_context_blob(multi_tf_data), PAIR_LABEL, "시장 분석", price_now)
     result = analyze_with_claude(multi_tf_data, pipeline)
     
-    # [수정] 복기용 가격 데이터 추가 저장
-    mem = get_memory("analyst")
-    mem.add_situation(
+    # 사후 복기를 위해 현재 가격을 meta에 저장
+    mem_manager = get_memory()
+    mem_manager.get("analyst").add_situation(
         situation=result.get("prompt", "")[:500],
         advice=result["raw_text"],
         meta={"price_at_analysis": price_now}
     )
     
-    if progress_cb: progress_cb("분석 완료")
+    if progress_cb: progress_cb("✅ 분석 완료")
     return result
