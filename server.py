@@ -2602,7 +2602,7 @@ async def _run_reflect_background():
             agent_mems = _get_agent_memories()
             for role in _AGENT_ROLES_FOR_REFLECT:
                 role_mem = agent_mems.get(role)
-                role_pending = role_mem.list_pending_reflections(min_age_seconds=7200.0, limit=3)
+                role_pending = role_mem.list_pending_reflections(min_age_seconds=7200.0, limit=8)
                 for rec in role_pending:
                     try:
                         _raw = rec.timestamp.strip().replace(" ", "T")
@@ -2669,13 +2669,34 @@ async def _run_reflect_background():
         except Exception:
             pass
 
+    # ── 개선 6: 리플렉션 건강도 로그 ─────────────────────
+    import logging as _lg_ref2
+    _ref_logger = _lg_ref2.getLogger("reflection")
+    _success  = sum(1 for r in all_results if r.get("updated"))
+    _failed   = sum(1 for r in all_results if r.get("error"))
+    _ref_logger.info(
+        "reflection 완료 — 처리=%d 성공=%d 실패=%d 스킵=%d 잔여미기록=%d",
+        len(all_results), _success, _failed, total_skipped, still_pending,
+    )
+    if _failed > 0:
+        for r in all_results:
+            if r.get("error"):
+                _ref_logger.warning("  ✗ %s/%s — %s", r.get("role"), r.get("timestamp","")[:16], r.get("error"))
+    if _success > 0:
+        _ref_logger.info(
+            "  ✓ 업데이트됨: %s",
+            ", ".join(f"{r['role']}/{r.get('timestamp','')[:16]}" for r in all_results if r.get("updated"))
+        )
+
     return {
         "ok": True,
         "price_now": price_now,
         "processed": len(all_results),
+        "success": _success,
+        "failed": _failed,
         "skipped_no_baseline": total_skipped,
-        "memory_size": total_records,          # 프론트엔드 호환 필드
-        "analyst_memory_size": total_records,  # 하위 호환
+        "memory_size": total_records,
+        "analyst_memory_size": total_records,
         "pending_count": still_pending,
         "results": all_results,
     }
