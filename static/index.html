@@ -5118,6 +5118,15 @@ async function runReflection() {
           status.textContent = `대기 기록 ${pending}건이 2시간 미경과로 아직 대상 아님 (전체 ${total}건)`;
         }
       }
+      // 리플렉션 완료 후 메모리 탭 즉시 갱신
+      try {
+        const mRes = await fetch("/api/memory?top_k=3");
+        const mData = await mRes.json();
+        if (mData.ok && Array.isArray(mData.memories)) {
+          state.memories = mData.memories;
+          renderAgentsPanel();
+        }
+      } catch (_) {}
     }
   } catch (e) {
     if (status) status.textContent = `오류: ${e.message}`;
