@@ -1,12 +1,15 @@
 import os
 import time
 import requests
-from .memory import get_memory
+# [수정] Import 경로 안전하게 확보
+try:
+    from agents.memory import get_memory
+except ImportError:
+    from memory import get_memory
 
 REFLECTION_MODEL = os.getenv("REFLECTION_MODEL", "claude-haiku-4-5")
 
 def get_historical_price_4h(timestamp_unix: float):
-    """바이낸스 API로 정확히 4시간 뒤 가격 조회"""
     try:
         target_time = int((timestamp_unix + 14400) * 1000)
         url = "https://api.binance.com/api/v3/klines"
@@ -23,6 +26,7 @@ def reflect_all():
     for role in roles:
         memory = mem_manager.get(role)
         now = time.time()
+        # 4시간 경과한 데이터만 복기
         pending = [r for r in memory.records if not r.outcome and (now - r.timestamp_unix > 14400)]
         
         for rec in pending:
@@ -32,7 +36,7 @@ def reflect_all():
             if not price_then or not price_after: continue
             
             diff = ((price_after - price_then) / price_then) * 100
-            prompt = f"4시간 전 분석: {rec.advice}\n결과: ${price_then:,.2f} -> ${price_after:,.2f} ({diff:+.2f}%)\n판단 미스나 기회비용을 분석하세요."
+            prompt = f"4시간 전 분석: {rec.advice}\n결과: ${price_then:,.2f} -> ${price_after:,.2f} ({diff:+.2f}%)\n판단 미스와 기회비용을 분석하세요."
             
             try:
                 msg = client.messages.create(
@@ -44,4 +48,6 @@ def reflect_all():
                 memory.update_outcome(rec.timestamp, msg.content[0].text)
             except: continue
         
-        memory.cleanup_old_records(3)
+        # 3일 경과 미완성 데이터 삭제
+        if hasattr(memory, 'cleanup_old_records'):
+            memory.cleanup_old_records(3)
