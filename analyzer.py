@@ -907,7 +907,30 @@ def run_full_analysis(
     # 5) 메모리에 이번 상황-조언 페어 기록 (reflection 을 위한 씨앗)
     if memory_obj is not None and MEMORY_WRITE_ENABLED:
         try:
-            situation_for_memory = situation_tags if situation_tags else context_blob
+            # situation = 지표 태그 + 핵심 수치 요약
+            # 리플렉션 프롬프트에서 당시 상황을 구체적으로 재현하기 위해
+            # 태그(BM25 매칭용) + 가격/신호/확신도(리플렉션 문맥용) 를 함께 저장
+            _sig  = result.get("signal", "")
+            _conf = result.get("confidence", 0)
+            _tl   = result.get("trade_levels") or {}
+            _tp_s = f"TP ${_tl['target']:,.0f}" if _tl.get("target") else ""
+            _sl_s = f"SL ${_tl['stop']:,.0f}"   if _tl.get("stop")   else ""
+            _lvl_s = " | ".join(filter(None, [_tp_s, _sl_s]))
+            _price_s = f"${price_at_analysis:,.2f}" if price_at_analysis else "N/A"
+
+            if situation_tags:
+                situation_for_memory = (
+                    f"[지표태그] {situation_tags}\n"
+                    f"[신호] {_sig} | 확신도 {_conf}% | 가격 {_price_s}"
+                    + (f" | {_lvl_s}" if _lvl_s else "")
+                )
+            else:
+                situation_for_memory = (
+                    f"[신호] {_sig} | 확신도 {_conf}% | 가격 {_price_s}"
+                    + (f" | {_lvl_s}" if _lvl_s else "") + "\n"
+                    + context_blob[:400]
+                )
+
             # judge 판정도 메타에 기록
             judge_meta = {}
             if pipeline is not None and pipeline.judge is not None and pipeline.judge.enabled:
@@ -921,9 +944,9 @@ def run_full_analysis(
                 advice=result.get("raw_text", ""),
                 outcome="",
                 meta={
-                    "signal": result.get("signal"),
-                    "confidence": result.get("confidence"),
-                    "trade_levels": result.get("trade_levels"),
+                    "signal": _sig,
+                    "confidence": _conf,
+                    "trade_levels": _tl,
                     "trading_signal": result.get("trading_signal"),
                     "pair": PAIR_LABEL,
                     "price_at_analysis": price_at_analysis,
