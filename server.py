@@ -147,7 +147,7 @@ def _is_session_valid(token: str) -> bool:
 async def auth_middleware(request, call_next):
     path = request.url.path
     # 정적 파일, 인증 엔드포인트는 통과
-    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol"):
+    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol", "/api/memory/reset"):
         return await call_next(request)
 
     # 세션 토큰 확인 (만료 검증 포함)
@@ -2475,34 +2475,14 @@ async def analyze_status(include_latest: bool = False):
 
 
 
-_reflect_state: dict = {"status": "idle", "result": None}
-
 @app.post("/api/reflect")
 async def reflect_endpoint():
     """
-    리플렉션을 백그라운드로 실행 — Railway 30초 타임아웃 방지.
-    완료 결과는 /api/reflect/status 로 폴링.
+    메모리에 누적된 과거 기록들 중 outcome 이 비어 있는 것들을
+    백그라운드에서 비동기 처리 — 타임아웃 방지.
     """
-    global _reflect_state
-    if _reflect_state.get("status") == "running":
-        return {"ok": True, "status": "running", "message": "이미 실행 중입니다"}
-    _reflect_state = {"status": "running", "result": None}
-
-    async def _wrapped():
-        global _reflect_state
-        result = await _run_reflect_background()
-        _reflect_state = {
-            "status": "done",
-            "result": result if isinstance(result, dict) else {"ok": True, "processed": 0},
-        }
-
-    asyncio.create_task(_wrapped())
-    return {"ok": True, "status": "running", "message": "리플렉션 시작됨"}
-
-@app.get("/api/reflect/status")
-async def reflect_status_endpoint():
-    """리플렉션 완료 여부 및 결과 반환."""
-    return {"ok": True, **_reflect_state}
+    result = await _run_reflect_background()
+    return result if isinstance(result, dict) else {"ok": True, "processed": 0}
 
 
 async def _run_reflect_background():
@@ -2539,8 +2519,20 @@ async def _run_reflect_background():
 
     # ── Analyst 메모리 리플렉션 ─────────────────────────
     analyst_memory = _get_memory("analyst")
-    pending = analyst_memory.list_pending_reflections(min_age_seconds=7200.0, limit=5)
-    print(f"[reflect-bg] analyst 전체={analyst_memory.size()}건 / analyst pending={len(pending)}건", flush=True)
+
+    # 가격 급변(±3% 이상) 시 조기 리플렉션 — 빠른 피드백 루프
+    try:
+        _prev_close = analyst_memory.list_records()[-1].meta.get("price_at_analysis") if analyst_memory.list_records() else None
+        _volatile = _prev_close and abs(price_now - _prev_close) / _prev_close >= 0.03
+    except Exception:
+        _volatile = False
+    _min_age = 1800.0 if _volatile else 7200.0  # 급변: 30분 / 평상: 2시간
+
+    pending = analyst_memory.list_pending_reflections(min_age_seconds=_min_age, limit=5)
+    import logging as _lg_ref
+    _lg_ref.getLogger("reflection").info(
+        "analyst pending=%d건 (min_age=%.0fs, volatile=%s)", len(pending), _min_age, _volatile
+    )
 
     for rec in pending:
         try:
@@ -2561,21 +2553,25 @@ async def _run_reflect_background():
                 continue
         price_then = float(price_then)
 
-        # 분석 이후 최고가/최저가 조회 (TP/SL 정확한 도달 여부 판단용)
+        # 분석 시점으로부터 N시간 후 가격 조회 (현재가 대신 그 당시 실제 가격으로 평가)
+        # elapsed 기준: 4h 미만 → 2h 후, 4h 이상 → 4h 후, 24h 이상 → 24h 후
         try:
-            from data_fetcher import fetch_high_low_since as _fhls
-            _hl = await asyncio.to_thread(_fhls, DEFAULT_SYMBOL, rec.timestamp)
-            _price_high = _hl.get("high")
-            _price_low  = _hl.get("low")
-            _price_now_rec = _hl.get("current") or price_now
+            from data_fetcher import fetch_price_at_offset as _fpao
+            _offset_h = 2.0 if elapsed < 4 * 3600 else (4.0 if elapsed < 24 * 3600 else 24.0)
+            _offset   = await asyncio.to_thread(_fpao, DEFAULT_SYMBOL, rec.timestamp, _offset_h)
+            _price_high    = _offset.get("high_to_offset") or None
+            _price_low     = _offset.get("low_to_offset") or None
+            _price_now_rec = _offset.get("price_at_offset") or price_now
+            _offset_ts     = _offset.get("offset_ts", "")
         except Exception:
-            _price_high = None
-            _price_low  = None
+            _price_high    = None
+            _price_low     = None
             _price_now_rec = price_now
+            _offset_ts     = ""
 
         res = await loop.run_in_executor(
             _executor,
-            lambda r=rec, pt=price_then, el=elapsed, pn=_price_now_rec, ph=_price_high, pl=_price_low: _reflect_for_role(
+            lambda r=rec, pt=price_then, el=elapsed, pn=_price_now_rec, ph=_price_high, pl=_price_low, ots=_offset_ts: _reflect_for_role(
                 role="analyst",
                 record_ts=r.timestamp,
                 situation=r.situation,
@@ -2586,6 +2582,7 @@ async def _run_reflect_background():
                 memory=analyst_memory,
                 price_high=ph,
                 price_low=pl,
+                offset_ts=ots,
             ),
         )
         all_results.append(res.to_dict())
@@ -2610,22 +2607,24 @@ async def _run_reflect_background():
                         continue
                     price_then = float(price_then)
 
-                    # 버그2 수정: 역할 리플렉션에도 구간 고가/저가 조회 (TP/SL 평가용)
+                    # 역할 리플렉션도 offset 시점 가격 사용 (현재가 대신 N시간 후 실제 가격)
                     try:
-                        from data_fetcher import fetch_high_low_since as _fhls
-                        _hl2 = await asyncio.to_thread(_fhls, DEFAULT_SYMBOL, rec.timestamp)
-                        _r_price_high = _hl2.get("high")
-                        _r_price_low  = _hl2.get("low")
-                        _r_price_now  = _hl2.get("current") or price_now
+                        from data_fetcher import fetch_price_at_offset as _fpao
+                        _r_offset_h = 2.0 if elapsed < 4 * 3600 else (4.0 if elapsed < 24 * 3600 else 24.0)
+                        _r_offset = await asyncio.to_thread(_fpao, DEFAULT_SYMBOL, rec.timestamp, _r_offset_h)
+                        _r_price_high = _r_offset.get("high_to_offset") or None
+                        _r_price_low  = _r_offset.get("low_to_offset") or None
+                        _r_price_now  = _r_offset.get("price_at_offset") or price_now
                     except Exception:
                         _r_price_high = None
                         _r_price_low  = None
                         _r_price_now  = price_now
 
+                    _r_offset_ts = _r_offset.get("offset_ts", "") if "_r_offset" in dir() else ""
                     res = await loop.run_in_executor(
                         _executor,
                         lambda r=rec, pt=price_then, el=elapsed, rl=role, rm=role_mem,
-                               pn=_r_price_now, ph=_r_price_high, pl=_r_price_low: _reflect_for_role(
+                               pn=_r_price_now, ph=_r_price_high, pl=_r_price_low, ots=_r_offset_ts: _reflect_for_role(
                             role=rl,
                             record_ts=r.timestamp,
                             situation=r.situation,
@@ -2636,6 +2635,7 @@ async def _run_reflect_background():
                             memory=rm,
                             price_high=ph,
                             price_low=pl,
+                            offset_ts=ots,
                         ),
                     )
                     all_results.append(res.to_dict())

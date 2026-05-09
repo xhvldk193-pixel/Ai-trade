@@ -129,3 +129,113 @@ def fetch_high_low_since(symbol: str, since_ts: str) -> dict:
         except Exception:
             return {"high": 0, "low": 0, "current": 0}
 
+
+
+def fetch_price_at_offset(symbol: str, since_ts: str, offset_hours: float) -> dict:
+    """
+    since_ts(ISO8601) 기준으로 offset_hours 이후 시점의 바이낸스 OHLCV 데이터를 반환.
+
+    리플렉션에서 "현재가" 대신 "분석 N시간 후 실제 가격"으로 평가하기 위해 사용.
+    바이낸스 Futures klines API의 startTime/endTime 파라미터로 정확한 시점 조회.
+
+    Parameters
+    ----------
+    symbol       : 'BTCUSDT'
+    since_ts     : 분석 기록 timestamp (ISO8601, UTC)
+    offset_hours : 몇 시간 후 가격을 볼지 (예: 2.0, 4.0, 24.0)
+
+    Returns
+    -------
+    {
+        "price_at_offset" : float,   # offset 시점의 종가
+        "high_to_offset"  : float,   # since ~ offset 구간 최고가
+        "low_to_offset"   : float,   # since ~ offset 구간 최저가
+        "offset_ts"       : str,     # 실제 조회된 캔들 시각 (ISO8601)
+        "elapsed_hours"   : float,   # 실제 경과 시간
+        "is_future"       : bool,    # offset 시점이 아직 미래인지 여부
+    }
+    """
+    import datetime as _dt
+
+    try:
+        since = _dt.datetime.fromisoformat(since_ts.replace("Z", "+00:00"))
+    except Exception:
+        since = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=offset_hours)
+
+    now_utc      = _dt.datetime.now(_dt.timezone.utc)
+    target_time  = since + _dt.timedelta(hours=offset_hours)
+    elapsed_real = (now_utc - since).total_seconds() / 3600  # 실제 경과 시간
+
+    # offset 시점이 아직 미래면 현재 시점으로 clamp
+    is_future = target_time > now_utc
+    if is_future:
+        target_time = now_utc
+
+    # offset 크기에 따라 interval 선택
+    if offset_hours <= 2:
+        interval = "15m"
+    elif offset_hours <= 8:
+        interval = "1h"
+    else:
+        interval = "4h"
+
+    # 바이낸스 klines: startTime=since_ms, endTime=target_ms, limit 충분히
+    since_ms  = int(since.timestamp() * 1000)
+    target_ms = int(target_time.timestamp() * 1000)
+
+    url = f"{BINANCE_FUTURES_URL}/fapi/v1/klines"
+    try:
+        resp = _http.get(url, params={
+            "symbol":    symbol,
+            "interval":  interval,
+            "startTime": since_ms,
+            "endTime":   target_ms,
+            "limit":     200,
+        }, timeout=10)
+        resp.raise_for_status()
+        raw = resp.json()
+
+        if not raw:
+            raise ValueError("빈 응답")
+
+        # raw: [[open_time, open, high, low, close, ...], ...]
+        highs  = [float(c[2]) for c in raw]
+        lows   = [float(c[3]) for c in raw]
+        # offset 시점에 가장 가까운 마지막 캔들의 close
+        last   = raw[-1]
+        price_at_offset = float(last[4])   # close
+        offset_ts_ms    = int(last[0])
+        offset_ts_str   = _dt.datetime.fromtimestamp(
+            offset_ts_ms / 1000, tz=_dt.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        return {
+            "price_at_offset": price_at_offset,
+            "high_to_offset":  max(highs),
+            "low_to_offset":   min(lows),
+            "offset_ts":       offset_ts_str,
+            "elapsed_hours":   elapsed_real,
+            "is_future":       is_future,
+        }
+
+    except Exception:
+        # 폴백: fetch_high_low_since 결과로 대체
+        try:
+            hl = fetch_high_low_since(symbol, since_ts)
+            return {
+                "price_at_offset": hl.get("current", 0),
+                "high_to_offset":  hl.get("high", 0),
+                "low_to_offset":   hl.get("low", 0),
+                "offset_ts":       now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "elapsed_hours":   elapsed_real,
+                "is_future":       is_future,
+            }
+        except Exception:
+            return {
+                "price_at_offset": 0,
+                "high_to_offset":  0,
+                "low_to_offset":   0,
+                "offset_ts":       "",
+                "elapsed_hours":   elapsed_real,
+                "is_future":       is_future,
+            }
