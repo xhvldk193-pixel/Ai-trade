@@ -222,7 +222,12 @@ class FinancialSituationMemory:
             for r, s in scored[:top_k]
         ]
 
-    def get_memories(self, query: str, top_k: int = 3) -> list[dict]:
+    def get_memories(
+        self,
+        query: str,
+        top_k: int = 4,
+        require_outcome: bool = True,
+    ) -> list[dict]:
         """
         query 와 가장 유사한 상황 top_k 개를 반환.
         반환: [{"record": {...}, "score": float}, ...]
@@ -231,6 +236,11 @@ class FinancialSituationMemory:
           1) BM25 시도 → 유효한 양수 점수 있으면 BM25 랭킹 반환
           2) BM25 전부 0점 (소규모 균질 코퍼스 → IDF 붕괴) → Jaccard 랭킹으로 대체
           3) rank_bm25 미설치 / 쿼리 토큰 없음 → Jaccard 랭킹
+
+        require_outcome=True(기본값):
+          outcome(리플렉션 결과)이 있는 기록을 우선 반환.
+          outcome 없는 기록은 슬롯이 남을 때만 보충.
+          학습 기여 없는 기록이 유사도 슬롯을 낭비하는 문제 방지.
         """
         with self._lock:
             records = list(self._records)
@@ -238,32 +248,36 @@ class FinancialSituationMemory:
         if not records:
             return []
 
-        corpus_tokens = [_tokenize(r.situation) for r in records]
-        query_tokens = _tokenize(query)
+        if require_outcome:
+            records_with    = [r for r in records if r.outcome]
+            records_without = [r for r in records if not r.outcome]
+        else:
+            records_with    = records
+            records_without = []
 
-        if not query_tokens:
-            # 쿼리 토큰 없음 → Jaccard (최신순 보조)
-            return self._jaccard_rank(query_tokens, corpus_tokens, records, top_k)
+        def _rank(recs, k):
+            if not recs:
+                return []
+            corpus_tokens = [_tokenize(r.situation) for r in recs]
+            query_tokens  = _tokenize(query)
+            if not query_tokens:
+                return self._jaccard_rank(query_tokens, corpus_tokens, recs, k)
+            if _BM25_AVAILABLE:
+                try:
+                    bm25   = BM25Okapi(corpus_tokens)
+                    scores = bm25.get_scores(query_tokens)
+                    ranked = sorted(zip(recs, scores), key=lambda x: x[1], reverse=True)[:k]
+                    ranked_hit = [(r, s) for r, s in ranked if s > 0]
+                    if ranked_hit:
+                        return [{"record": r.to_dict(), "score": float(s)} for r, s in ranked_hit]
+                except Exception:
+                    pass
+            return self._jaccard_rank(query_tokens, corpus_tokens, recs, k)
 
-        if _BM25_AVAILABLE:
-            try:
-                bm25 = BM25Okapi(corpus_tokens)
-                scores = bm25.get_scores(query_tokens)
-                ranked = sorted(
-                    zip(records, scores),
-                    key=lambda x: x[1],
-                    reverse=True,
-                )[:top_k]
-                ranked_hit = [(r, s) for r, s in ranked if s > 0]
-                if ranked_hit:
-                    # BM25 정상 동작
-                    return [{"record": r.to_dict(), "score": float(s)} for r, s in ranked_hit]
-                # BM25 전부 0점 → IDF 붕괴 (소규모 균질 코퍼스) → Jaccard로 대체
-            except Exception:
-                pass
-
-        # BM25 미설치 또는 IDF 붕괴 → Jaccard 유사도
-        return self._jaccard_rank(query_tokens, corpus_tokens, records, top_k)
+        results = _rank(records_with, top_k)
+        if len(results) < top_k and records_without:
+            results += _rank(records_without, top_k - len(results))
+        return results
 
     def __len__(self) -> int:
         return len(self._records)
@@ -339,6 +353,14 @@ def format_memory_block(memories: list[dict]) -> str:
             snippet = advice if len(advice) <= 600 else advice[:600] + " …"
             lines.append(f"  당시 조언: {snippet}")
         if outcome:
+            # 다음 체크리스트 항목 추출 → 상단 강조
+            checklist = ""
+            for _cl in outcome.splitlines():
+                if _cl.strip().startswith("다음 체크리스트:"):
+                    checklist = _cl.strip()
+                    break
+            if checklist:
+                lines.append(f"  ⚑ {checklist}")
             # 리플렉션 전문 포함 — '놓친 단서'·'다음 체크리스트' 등이 후반부에 위치하므로
             # 300자 제한을 1000자로 확장해 자기개선 루프에 실질적으로 활용
             snippet = outcome if len(outcome) <= 1000 else outcome[:1000] + " …"
@@ -401,7 +423,7 @@ class AgentMemories:
             self._stores[role] = FinancialSituationMemory(role)
         return self._stores[role]
 
-    def recall(self, role: str, situation: str, top_k: int = 2) -> str:
+    def recall(self, role: str, situation: str, top_k: int = 4) -> str:
         """
         역할별 과거 기억을 회상해 프롬프트 삽입용 텍스트로 반환.
         기억이 없거나 BM25 매칭 실패 시 빈 문자열.
@@ -419,7 +441,18 @@ class AgentMemories:
             # 역할별 회상 — outcome 에 리플렉션 교훈이 담기므로 충분히 전달
             advice_snippet  = advice[:400]  + " …" if len(advice)  > 400  else advice
             outcome_snippet = outcome[:600] + " …" if len(outcome) > 600 else outcome
+
+            # "다음 체크리스트:" 항목을 별도 추출해 회상 상단에 강조
+            checklist = ""
+            if outcome:
+                for _cl in outcome.splitlines():
+                    if _cl.strip().startswith("다음 체크리스트:"):
+                        checklist = _cl.strip()
+                        break
+
             lines.append(f"\n— 사례 {i} · {ts} · 유사도 {score:.2f} —")
+            if checklist:
+                lines.append(f"  ⚑ {checklist}")
             if advice_snippet:
                 lines.append(f"  당시 주장: {advice_snippet}")
             if outcome_snippet:

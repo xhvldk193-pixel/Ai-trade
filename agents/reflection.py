@@ -142,10 +142,10 @@ REFLECTION_USER_TEMPLATE = """[과거 판단 시점] {past_ts}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 [사후 가격 변화]
-기준가: ${price_then:,.2f}
-현재가: ${price_now:,.2f}
+기준가 (분석 시점): ${price_then:,.2f}
+평가가 ({eval_label} 후 실제가): ${price_now:,.2f}
 변화율: {pct_change:+.2f}% ({direction})
-경과 시간: {elapsed_label}
+경과 시간: {elapsed_label}{offset_ts_line}
 {high_low_block}{tpsl_block}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {missed_block}위 정보를 바탕으로 리플렉션을 작성하세요.
@@ -164,6 +164,7 @@ class ReflectionResult:
     reflection_text: str
     updated: bool           # 메모리에 outcome 업데이트 성공 여부
     error: Optional[str] = None
+    offset_ts: Optional[str] = None   # 평가 기준 시점 (분석 N시간 후)
 
     def to_dict(self) -> dict:
         return {
@@ -175,6 +176,7 @@ class ReflectionResult:
             "reflection_text": self.reflection_text,
             "updated":         self.updated,
             "error":           self.error,
+            "offset_ts":       self.offset_ts,
         }
 
 
@@ -185,7 +187,7 @@ def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
         try:
             msg = client.messages.create(
                 model=REFLECTION_MODEL,
-                max_tokens=800,
+                max_tokens=1200,  # 복잡 케이스(missed/TP+SL 동시) 잘림 방지
                 system=system,
                 messages=[{"role": "user", "content": user}],
             )
@@ -247,6 +249,7 @@ def reflect_for_role(
     memory: Optional[FinancialSituationMemory] = None,
     price_high: Optional[float] = None,
     price_low: Optional[float] = None,
+    offset_ts: Optional[str] = None,     # 평가 기준 시점 (분석 N시간 후 ISO8601)
 ) -> ReflectionResult:
     """
     역할별 전용 시스템 프롬프트를 사용해 리플렉션을 실행한다.
@@ -358,6 +361,15 @@ def reflect_for_role(
         )
 
     system_prompt = ROLE_REFLECTION_SYSTEMS.get(role, DEFAULT_REFLECTION_SYSTEM)
+    # eval_label: 평가 기준 시점 설명 (2h/4h/24h 후)
+    if elapsed_seconds < 4 * 3600:
+        _eval_label = "2시간"
+    elif elapsed_seconds < 24 * 3600:
+        _eval_label = "4시간"
+    else:
+        _eval_label = "24시간"
+    _offset_ts_line = ("\n" + f"평가 시각: {offset_ts}" if offset_ts else "")
+
     prompt = REFLECTION_USER_TEMPLATE.format(
         past_ts=record_ts,
         role=role,
@@ -368,6 +380,8 @@ def reflect_for_role(
         pct_change=pct,
         direction=direction,
         elapsed_label=_elapsed_label(elapsed_seconds),
+        eval_label=_eval_label,
+        offset_ts_line=_offset_ts_line,
         high_low_block=high_low_block,
         tpsl_block=tpsl_block,
         missed_block=missed_block,
@@ -390,10 +404,12 @@ def reflect_for_role(
         )
 
     # 메모리에 outcome 기록
+    _eval_suffix = f" ({_eval_label} 후 실제가)" if offset_ts else ""
+    _ts_sfx = (" @ " + offset_ts) if offset_ts else ""
     outcome_block = (
-        f"[사후 {_elapsed_label(elapsed_seconds)}] "
-        f"${price_then:,.2f} → ${price_now:,.2f} ({pct:+.2f}%, {direction})\n"
-        f"{reflection_text}"
+        "[사후 " + _elapsed_label(elapsed_seconds) + "]" + _eval_suffix + " "
+        + f"${price_then:,.2f} → ${price_now:,.2f} ({pct:+.2f}%, {direction})"
+        + _ts_sfx + "\n" + reflection_text
     )
     updated = memory.update_outcome(record_ts, outcome_block)
 
@@ -405,4 +421,5 @@ def reflect_for_role(
         pct_change=pct,
         reflection_text=reflection_text,
         updated=updated,
+        offset_ts=offset_ts,
     )
