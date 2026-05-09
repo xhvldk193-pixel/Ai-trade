@@ -5097,40 +5097,67 @@ async function runReflection() {
   const btn = document.getElementById("btn-reflect");
   const status = document.getElementById("reflect-status");
   if (btn) { btn.disabled = true; btn.textContent = "리플렉션 실행 중..."; }
-  if (status) { status.textContent = ""; }
+  if (status) { status.textContent = "실행 중... (완료까지 수십 초 소요)"; }
+
   try {
+    // 1) 백그라운드 시작
     const res = await fetch("/api/reflect", { method: "POST" });
     const data = await res.json();
     if (!data.ok) {
       if (status) status.textContent = `실패: ${data.error || "오류"}`;
-    } else {
-      if (status) {
-        const processed = data.processed || 0;
-        const total = data.memory_size ?? data.analyst_memory_size ?? 0;
-        const pending = data.pending_count ?? 0;
-        if (processed > 0) {
-          status.textContent = `${processed}건 리플렉션 완료 (전체 ${total}건 · 대기 ${pending}건)`;
-        } else if (total === 0) {
-          status.textContent = `저장된 분석 기록이 없습니다. 분석을 먼저 실행해주세요.`;
-        } else if (pending === 0) {
-          status.textContent = `모든 기록이 이미 리플렉션 완료됐습니다 (전체 ${total}건)`;
-        } else {
-          status.textContent = `대기 기록 ${pending}건이 2시간 미경과로 아직 대상 아님 (전체 ${total}건)`;
-        }
-      }
-      // 리플렉션 완료 후 메모리 탭 즉시 갱신
-      try {
-        const mRes = await fetch("/api/memory?top_k=3");
-        const mData = await mRes.json();
-        if (mData.ok && Array.isArray(mData.memories)) {
-          state.memories = mData.memories;
-          renderAgentsPanel();
-        }
-      } catch (_) {}
+      return;
     }
+
+    // 2) 완료될 때까지 3초마다 폴링
+    const _showResult = (result) => {
+      if (!status) return;
+      const processed = result.processed || 0;
+      const total = result.memory_size ?? result.analyst_memory_size ?? 0;
+      const pending = result.pending_count ?? 0;
+      if (processed > 0) {
+        status.textContent = `${processed}건 리플렉션 완료 (전체 ${total}건 · 대기 ${pending}건)`;
+      } else if (total === 0) {
+        status.textContent = `저장된 분석 기록이 없습니다. 분석을 먼저 실행해주세요.`;
+      } else if (pending === 0) {
+        status.textContent = `모든 기록이 이미 리플렉션 완료됐습니다 (전체 ${total}건)`;
+      } else {
+        status.textContent = `대기 기록 ${pending}건이 2시간 미경과로 아직 대상 아님 (전체 ${total}건)`;
+      }
+    };
+
+    let attempts = 0;
+    const maxAttempts = 40; // 최대 2분 대기
+    const poll = async () => {
+      attempts++;
+      try {
+        const sRes = await fetch("/api/reflect/status");
+        const sData = await sRes.json();
+        if (sData.status === "done") {
+          _showResult(sData.result || {});
+          // 메모리 탭 갱신
+          try {
+            const mRes = await fetch("/api/memory?top_k=3");
+            const mData = await mRes.json();
+            if (mData.ok && Array.isArray(mData.memories)) {
+              state.memories = mData.memories;
+              renderAgentsPanel();
+            }
+          } catch (_) {}
+          if (btn) { btn.disabled = false; btn.textContent = "과거 판단 리플렉션 실행"; }
+        } else if (attempts < maxAttempts) {
+          setTimeout(poll, 3000);
+        } else {
+          if (status) status.textContent = "완료 확인 시간 초과 — 로그를 확인해주세요";
+          if (btn) { btn.disabled = false; btn.textContent = "과거 판단 리플렉션 실행"; }
+        }
+      } catch (_) {
+        if (attempts < maxAttempts) setTimeout(poll, 3000);
+      }
+    };
+    setTimeout(poll, 3000);
+
   } catch (e) {
     if (status) status.textContent = `오류: ${e.message}`;
-  } finally {
     if (btn) { btn.disabled = false; btn.textContent = "과거 판단 리플렉션 실행"; }
   }
 }
