@@ -127,9 +127,26 @@ def _write_agent_memory(
     if not AGENT_MEMORY_WRITE_ENABLED:
         return
     try:
+        # situation 에 price_at_analysis 수치 보강
+        # → 리플렉션에서 당시 가격 맥락을 재현하기 위해
+        _price = meta.get("price_at_analysis")
+        _pair  = meta.get("pair", "")
+        _sig   = meta.get("signal", "")
+        _verd  = meta.get("verdict", "")  # judge 전용
+        _enriched = situation
+        _suffix_parts = []
+        if _price:
+            _suffix_parts.append(f"가격 ${_price:,.2f}")
+        if _sig:
+            _suffix_parts.append(f"신호 {_sig}")
+        if _verd:
+            _suffix_parts.append(f"판정 {_verd}")
+        if _suffix_parts:
+            _enriched = situation + " | " + " | ".join(_suffix_parts)
+
         mem = agent_memories.get(role)
         stored = mem.add_situation(
-            situation=situation,
+            situation=_enriched,
             advice=advice,
             outcome="",
             meta=meta,
@@ -171,7 +188,8 @@ def run_pipeline(
     -------
     PipelineResult
     """
-    # 메모리 쿼리: situation_tags > 핵심 지표 추출 > blob 앞부분 순으로 품질 보장
+    # 메모리 쿼리: situation_tags(enriched) > 핵심 지표 추출 > blob 앞부분
+    # current_situation 은 analyzer.py 에서 [지표태그]+[신호/가격] 형식으로 전달됨
     if current_situation:
         _query = current_situation
     else:
@@ -184,6 +202,11 @@ def run_pipeline(
             if len(_kw_lines) >= 8:
                 break
         _query = " | ".join(_kw_lines) if _kw_lines else context_blob[:300]
+    # price 메타를 _query 에 추가 — 에이전트 메모리 situation 품질 향상
+    if price_at_analysis:
+        _query_with_price = f"{_query} | 가격 ${price_at_analysis:,.2f}"
+    else:
+        _query_with_price = _query
 
     # ── 1) Bull/Bear 토론 ─────────────────────────────
     debate = run_bull_bear_debate(
@@ -215,14 +238,14 @@ def run_pipeline(
         if debate.final_bull:
             _write_agent_memory(
                 agent_memories, "bull",
-                situation=_query,
+                situation=_query_with_price,
                 advice=debate.final_bull,
                 meta={"pair": pair_label, "round": debate.rounds, **_price_meta},
             )
         if debate.final_bear:
             _write_agent_memory(
                 agent_memories, "bear",
-                situation=_query,
+                situation=_query_with_price,
                 advice=debate.final_bear,
                 meta={"pair": pair_label, "round": debate.rounds, **_price_meta},
             )
@@ -250,7 +273,7 @@ def run_pipeline(
         ):
             _write_agent_memory(
                 agent_memories, "judge",
-                situation=_query,
+                situation=_query_with_price,
                 advice=f"판정: {judge.verdict}\n이유: {judge.reasoning}",
                 meta={
                     "pair": pair_label,
@@ -289,7 +312,7 @@ def run_pipeline(
                 if final_text:
                     _write_agent_memory(
                         agent_memories, role_key,
-                        situation=_query,
+                        situation=_query_with_price,
                         advice=final_text,
                         meta={"pair": pair_label, "rounds": risk.rounds, **_price_meta},
                     )
@@ -316,7 +339,9 @@ def run_pipeline(
     debate_block = format_debate_block(debate)
     risk_block   = format_risk_block(risk) if risk is not None else ""
     judge_block  = _judge_block_text       # 이미 만들어 둔 것 재활용
-    combined = _merge_blocks(debate_block, judge_block, risk_block, memory_block)
+    # memory_block 을 맨 앞에 배치 — LLM 은 컨텍스트 앞쪽에 집중하므로
+    # 과거 체크리스트/반복 실수가 현재 토론보다 먼저 보여야 학습이 실제 행동에 반영됨
+    combined = _merge_blocks(memory_block, debate_block, judge_block, risk_block)
 
     return PipelineResult(
         debate=debate,

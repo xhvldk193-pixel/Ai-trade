@@ -43,12 +43,17 @@ DEFAULT_MEMORY_DIR = Path(
 # 한국어 + 영문 + 숫자 혼재 → 공백/특수문자로 단순 분리 후 소문자화.
 # 한글 형태소 분석기를 쓰면 더 좋지만 의존성 무거워져서 생략.
 _TOKEN_RE = re.compile(r"[A-Za-z가-힣0-9%]+")
+# 5자리 이상 순수 숫자(절대가격)는 BM25에서 노이즈 — 제외
+# "81412", "82829" 같은 가격 숫자가 다르면 유사 상황도 0점 처리되는 문제 방지
+_PRICE_NUM_RE = re.compile(r"^\d{5,}$")
 
 
 def _tokenize(text: str) -> list[str]:
     if not text:
         return []
-    return [t.lower() for t in _TOKEN_RE.findall(text)]
+    tokens = [t.lower() for t in _TOKEN_RE.findall(text)]
+    # 절대가격 숫자 제거 — 범주형 태그·짧은 숫자(24h, 3%)는 유지
+    return [t for t in tokens if not _PRICE_NUM_RE.match(t)]
 
 
 @dataclass
@@ -319,7 +324,7 @@ class FinancialSituationMemory:
     def list_pending_reflections(
         self,
         min_age_seconds: float = 300.0,   # 5분 (기존 30분 → 완화)
-        limit: int = 5,
+        limit: int = 10,                  # 5 → 10: 200건 적체 해소 가속
     ) -> list[MemoryRecord]:
         """
         Reflection 대상 — outcome 이 비어 있고 충분히 시간이 지난 기록만.
@@ -354,16 +359,38 @@ class FinancialSituationMemory:
 # ── 프롬프트 주입용 포매터 ──────────────────────────
 def format_memory_block(memories: list[dict]) -> str:
     """
-    get_memories() 결과를 최종 프롬프트 주입용 [과거 유사 상황] 블록으로 변환.
+    get_memories() 결과를 최종 프롬프트 주입용 블록으로 변환.
+    체크리스트/반복실수 항목을 최상단에 강조 배치 — LLM이 현재 분석 전에 반드시 확인하도록.
     비어 있으면 빈 문자열 반환.
     """
     if not memories:
         return ""
 
-    lines = ["[과거 유사 상황 — BM25 회상]"]
+    # 먼저 모든 사례의 체크리스트/반복실수를 집계해 최상단에 배치
+    # LLM 이 현재 분석 전에 누적 패턴을 먼저 인식하도록
+    all_checklists: list[str] = []
+    all_repeats: list[str] = []
+    for _mem in memories:
+        _rec = _mem.get("record", {}) if isinstance(_mem, dict) else {}
+        _out = (_rec.get("outcome") or "").strip()
+        for _line in _out.splitlines():
+            _s = _line.strip()
+            if _s.startswith("다음 체크리스트:") and _s not in all_checklists:
+                all_checklists.append(_s)
+            if _s.startswith("반복 실수 금지:") and _s not in all_repeats:
+                all_repeats.append(_s)
+
+    lines = ["[과거 유사 상황 — 자기학습 블록]"]
+    if all_checklists or all_repeats:
+        lines.append("━━ 누적 학습 체크리스트 (현재 데이터로 먼저 확인하세요) ━━")
+        for _cl in all_checklists:
+            lines.append(f"  ⚑ {_cl}")
+        for _rp in all_repeats:
+            lines.append(f"  ⚠ {_rp}")
+        lines.append("")
     lines.append(
-        "  ⚠️ 아래는 비슷한 지표 조합에서 과거에 어떤 조언을 했고 결과가 어땠는지의 기록입니다. "
-        "단순히 답습하지 말고, 현재 조건과 차이를 대조하면서 교훈만 추출하세요."
+        "  아래 사례들은 유사 지표 조합에서의 과거 판단 기록입니다. "
+        "답습하지 말고 현재 조건과 차이를 대조해 교훈만 추출하세요."
     )
 
     for i, item in enumerate(memories, start=1):
