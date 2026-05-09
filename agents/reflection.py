@@ -193,6 +193,21 @@ class ReflectionResult:
 
 
 def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
+    """
+    LLM 호출 — 시스템 프롬프트에 prompt caching 적용.
+
+    역할별 시스템 프롬프트는 고정 텍스트이므로 ephemeral 캐싱 가능.
+    1회 리플렉션 실행에 analyst 10건 + 역할별 최대 56건 = 최대 66회 호출 시
+    2번째 호출부터 시스템 프롬프트 입력 비용 90% 절감.
+    """
+    # 시스템 프롬프트를 list[dict] 형태로 변환해 cache_control 마크
+    system_blocks = [
+        {
+            "type": "text",
+            "text": system,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
     max_retries = 3
     wait = 8
     for attempt in range(max_retries):
@@ -200,7 +215,7 @@ def _call_llm(client: anthropic.Anthropic, system: str, user: str) -> str:
             msg = client.messages.create(
                 model=REFLECTION_MODEL,
                 max_tokens=1200,  # 복잡 케이스(missed/TP+SL 동시) 잘림 방지
-                system=system,
+                system=system_blocks,
                 messages=[{"role": "user", "content": user}],
             )
             if not hasattr(msg, "content") or not isinstance(msg.content, list):
