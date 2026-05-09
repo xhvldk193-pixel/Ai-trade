@@ -147,7 +147,7 @@ def _is_session_valid(token: str) -> bool:
 async def auth_middleware(request, call_next):
     path = request.url.path
     # 정적 파일, 인증 엔드포인트는 통과
-    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol", "/api/memory/reset"):
+    if path in ("/auth/login", "/auth/verify", "/auth/check", "/api/symbol"):
         return await call_next(request)
 
     # 세션 토큰 확인 (만료 검증 포함)
@@ -2475,14 +2475,34 @@ async def analyze_status(include_latest: bool = False):
 
 
 
+_reflect_state: dict = {"status": "idle", "result": None}
+
 @app.post("/api/reflect")
 async def reflect_endpoint():
     """
-    메모리에 누적된 과거 기록들 중 outcome 이 비어 있는 것들을
-    백그라운드에서 비동기 처리 — 타임아웃 방지.
+    리플렉션을 백그라운드로 실행 — Railway 30초 타임아웃 방지.
+    완료 결과는 /api/reflect/status 로 폴링.
     """
-    result = await _run_reflect_background()
-    return result if isinstance(result, dict) else {"ok": True, "processed": 0}
+    global _reflect_state
+    if _reflect_state.get("status") == "running":
+        return {"ok": True, "status": "running", "message": "이미 실행 중입니다"}
+    _reflect_state = {"status": "running", "result": None}
+
+    async def _wrapped():
+        global _reflect_state
+        result = await _run_reflect_background()
+        _reflect_state = {
+            "status": "done",
+            "result": result if isinstance(result, dict) else {"ok": True, "processed": 0},
+        }
+
+    asyncio.create_task(_wrapped())
+    return {"ok": True, "status": "running", "message": "리플렉션 시작됨"}
+
+@app.get("/api/reflect/status")
+async def reflect_status_endpoint():
+    """리플렉션 완료 여부 및 결과 반환."""
+    return {"ok": True, **_reflect_state}
 
 
 async def _run_reflect_background():
