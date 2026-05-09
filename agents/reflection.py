@@ -42,7 +42,10 @@ _BASE_RULES = """
 출력 규칙:
 - 마크다운(**,##,---), HTML 금지. 일반 텍스트 + 최소 이모지.
 - 300~500자. 장황함 금지.
-- 마지막 줄은 반드시 '다음 체크리스트:' 로 시작하는 1~2줄 요약."""
+- 마지막 2줄은 반드시 아래 형식을 엄격히 지킬 것:
+  다음 체크리스트: <조건1> / <조건2> (슬래시로 구분, 최대 3개)
+  반복 실수 금지: <이번에 확인된 패턴 한 줄>
+- 체크리스트는 다음 분석 진입 전에 확인할 구체적 조건으로 작성 (예: '4h MACD 양전환 확인', '펀딩 0.01% 이하 확인')"""
 
 # 모든 reflection 시스템 프롬프트에 공통으로 들어가는 hindsight bias 방지 가드.
 # LLM 이 사후 가격 변화를 보면 '당시 X 가 명백한 신호였는데 놓쳤다' 같은 결과론에
@@ -52,7 +55,9 @@ _HINDSIGHT_GUARD = """
 - 사후 가격을 알고 있다고 해서 '당시 X 가 명백한 신호였는데 놓쳤다' 라고 말하지 말 것.
 - 가격 결과는 노이즈·거시 충격·유동성 등으로도 변동할 수 있습니다. 판단은 당시 데이터 기준으로만.
 - 평가 기준: '당시 데이터로 그 판단이 합리적이었나' — 결과의 좋고나쁨은 부차적.
-- 결과 좋음 ≠ 판단 옳음, 결과 나쁨 ≠ 판단 틀림. 두 차원을 분리하여 평가하세요."""
+- 결과 좋음 ≠ 판단 옳음, 결과 나쁨 ≠ 판단 틀림. 두 차원을 분리하여 평가하세요.
+- TP/SL 미도달이라도 판단 자체가 틀렸다고 단정하지 말 것. 리스크 관리 설정의 적절성을 분리 평가.
+- 방향이 맞아도 진입 타이밍/레벨이 나빴다면 그 부분만 지적할 것."""
 
 ROLE_REFLECTION_SYSTEMS: dict[str, str] = {
     "analyst": f"""당신은 BTC 선물 애널리스트의 'Reflection Coach' 입니다.
@@ -134,7 +139,8 @@ DEFAULT_REFLECTION_SYSTEM = ROLE_REFLECTION_SYSTEMS["analyst"]
 
 REFLECTION_USER_TEMPLATE = """[과거 판단 시점] {past_ts}
 [역할] {role}
-[판단 당시 상황 요약]
+
+[판단 당시 상황 — 지표 태그]
 {past_situation}
 
 [판단 당시 발언/조언]
@@ -143,13 +149,19 @@ REFLECTION_USER_TEMPLATE = """[과거 판단 시점] {past_ts}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 [사후 가격 변화]
 기준가 (분석 시점): ${price_then:,.2f}
-평가가 ({eval_label} 후 실제가): ${price_now:,.2f}
+평가가: ${price_now:,.2f}{offset_ts_line}
 변화율: {pct_change:+.2f}% ({direction})
-경과 시간: {elapsed_label}{offset_ts_line}
+경과 시간: {elapsed_label}
 {high_low_block}{tpsl_block}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{missed_block}위 정보를 바탕으로 리플렉션을 작성하세요.
-{missed_instruction}마지막 줄은 반드시 '다음 체크리스트:' 로 시작하는 1~2줄 요약으로 마치세요.
+{missed_block}평가 지침:
+1. 지표 태그를 근거로 당시 판단이 합리적이었는지 평가하세요.
+2. 맞은 부분 / 틀린 부분을 분리해서 서술하세요.
+3. 방향이 맞아도 진입 레벨·타이밍까지 평가하세요.
+{missed_instruction}
+마지막 2줄은 반드시 아래 형식:
+다음 체크리스트: <조건1> / <조건2> / <조건3>
+반복 실수 금지: <이번 케이스에서 확인된 패턴>
 """
 
 
@@ -310,8 +322,13 @@ def reflect_for_role(
     # ※ list_pending_reflections 는 outcome 이 비어있는 것만 반환하므로
     #    outcome 업데이트 후 조회하면 _rec=None 이 돼 TP/SL 블록이 누락됨.
     #    list_records() 를 사용해 outcome 여부와 무관하게 항상 meta 를 읽는다.
-    _rec = next((r for r in memory.list_records()
-                 if r.timestamp == record_ts), None)
+    # _norm_ts 로 정규화 비교 — 형식 불일치 시 TP/SL 블록 누락 방지
+    _norm_record_ts = memory._norm_ts(record_ts)
+    _rec = next(
+        (r for r in memory.list_records()
+         if memory._norm_ts(r.timestamp) == _norm_record_ts),
+        None,
+    )
     _meta = (_rec.meta or {}) if _rec else {}
     _tl = _meta.get("trade_levels") or {}
     _tp = _tl.get("target")
@@ -361,14 +378,19 @@ def reflect_for_role(
         )
 
     system_prompt = ROLE_REFLECTION_SYSTEMS.get(role, DEFAULT_REFLECTION_SYSTEM)
-    # eval_label: 평가 기준 시점 설명 (2h/4h/24h 후)
+    # eval_label: 실제 offset 시점 기반으로 계산 (elapsed 기준이 아닌 실제 사용된 offset_h)
+    # server.py 에서 elapsed < 4h → offset 2h, elapsed < 24h → offset 4h, else → 24h
     if elapsed_seconds < 4 * 3600:
         _eval_label = "2시간"
     elif elapsed_seconds < 24 * 3600:
         _eval_label = "4시간"
     else:
         _eval_label = "24시간"
-    _offset_ts_line = ("\n" + f"평가 시각: {offset_ts}" if offset_ts else "")
+    # offset_ts 가 있으면 실제 평가 시각 명시 — 없으면 현재가 사용임을 표기
+    if offset_ts:
+        _offset_ts_line = f"\n평가 시각: {offset_ts} (분석 {_eval_label} 후 실제가)"
+    else:
+        _offset_ts_line = f"\n※ offset 가격 조회 실패 — 현재가로 대체 평가 (신뢰도 낮음)"
 
     prompt = REFLECTION_USER_TEMPLATE.format(
         past_ts=record_ts,

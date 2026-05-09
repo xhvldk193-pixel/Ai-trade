@@ -383,16 +383,19 @@ def format_memory_block(memories: list[dict]) -> str:
             snippet = advice if len(advice) <= 600 else advice[:600] + " …"
             lines.append(f"  당시 조언: {snippet}")
         if outcome:
-            # 다음 체크리스트 항목 추출 → 상단 강조
-            checklist = ""
+            # 체크리스트 + 반복 실수 금지 두 줄 모두 추출해 상단 강조
+            checklist_line = ""
+            repeat_line = ""
             for _cl in outcome.splitlines():
-                if _cl.strip().startswith("다음 체크리스트:"):
-                    checklist = _cl.strip()
-                    break
-            if checklist:
-                lines.append(f"  ⚑ {checklist}")
-            # 리플렉션 전문 포함 — '놓친 단서'·'다음 체크리스트' 등이 후반부에 위치하므로
-            # 300자 제한을 1000자로 확장해 자기개선 루프에 실질적으로 활용
+                _s = _cl.strip()
+                if _s.startswith("다음 체크리스트:") and not checklist_line:
+                    checklist_line = _s
+                if _s.startswith("반복 실수 금지:") and not repeat_line:
+                    repeat_line = _s
+            if checklist_line:
+                lines.append(f"  ⚑ {checklist_line}")
+            if repeat_line:
+                lines.append(f"  ⚠ {repeat_line}")
             snippet = outcome if len(outcome) <= 1000 else outcome[:1000] + " …"
             lines.append(f"  실제 결과: {snippet}")
         else:
@@ -473,16 +476,21 @@ class AgentMemories:
             outcome_snippet = outcome[:600] + " …" if len(outcome) > 600 else outcome
 
             # "다음 체크리스트:" 항목을 별도 추출해 회상 상단에 강조
-            checklist = ""
+            checklist_line = ""
+            repeat_line = ""
             if outcome:
                 for _cl in outcome.splitlines():
-                    if _cl.strip().startswith("다음 체크리스트:"):
-                        checklist = _cl.strip()
-                        break
+                    _s = _cl.strip()
+                    if _s.startswith("다음 체크리스트:") and not checklist_line:
+                        checklist_line = _s
+                    if _s.startswith("반복 실수 금지:") and not repeat_line:
+                        repeat_line = _s
 
             lines.append(f"\n— 사례 {i} · {ts} · 유사도 {score:.2f} —")
-            if checklist:
-                lines.append(f"  ⚑ {checklist}")
+            if checklist_line:
+                lines.append(f"  ⚑ {checklist_line}")
+            if repeat_line:
+                lines.append(f"  ⚠ {repeat_line}")
             if advice_snippet:
                 lines.append(f"  당시 주장: {advice_snippet}")
             if outcome_snippet:
