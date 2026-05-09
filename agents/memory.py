@@ -1,3 +1,6 @@
+# =============================================
+# Financial Situation Memory (BM25 기반 + 자동 정제)
+# =============================================
 import json
 import os
 import re
@@ -43,8 +46,10 @@ class FinancialSituationMemory:
         with open(self.file_path, "r", encoding="utf-8") as f:
             for line in f:
                 if not line.strip(): continue
-                d = json.loads(line)
-                self.records.append(MemoryRecord(**d))
+                try:
+                    d = json.loads(line)
+                    self.records.append(MemoryRecord(**d))
+                except: continue
         self._rebuild_bm25()
 
     def _rebuild_bm25(self):
@@ -62,11 +67,19 @@ class FinancialSituationMemory:
 
     def add_situation(self, situation: str, advice: str, outcome: str = "", meta: dict = None):
         with self._lock:
+            # 최근 5개와 동일 상황이면 중복 방지
             for r in self.records[-5:]:
                 if r.situation == situation: return None
+            
             now = datetime.now(timezone.utc)
-            rec = MemoryRecord(timestamp=now.isoformat(), timestamp_unix=now.timestamp(),
-                               situation=situation, advice=advice, outcome=outcome, meta=meta or {})
+            rec = MemoryRecord(
+                timestamp=now.isoformat(),
+                timestamp_unix=now.timestamp(),
+                situation=situation,
+                advice=advice,
+                outcome=outcome,
+                meta=meta or {}
+            )
             self.records.append(rec)
             self._save()
             self._rebuild_bm25()
@@ -82,11 +95,15 @@ class FinancialSituationMemory:
         return False
 
     def cleanup_old_no_outcome_records(self, days_threshold=3):
-        """결과가 없는 3일 이상 된 노이즈 삭제 (손절/익절 등 결과가 있는 기록은 영구 보존)"""
+        """
+        결과(outcome)가 없는 3일 이상 된 노이즈 데이터를 삭제합니다.
+        손절/수익/미진입 복기 등 결과가 기록된 '학습 데이터'는 절대 삭제하지 않습니다.
+        """
         now = time.time()
         threshold_seconds = days_threshold * 24 * 3600
+        initial_count = len(self.records)
+        
         with self._lock:
-            initial_count = len(self.records)
             self.records = [
                 rec for rec in self.records 
                 if (rec.outcome and len(rec.outcome.strip()) > 0) or (now - rec.timestamp_unix < threshold_seconds)
@@ -103,6 +120,7 @@ class FinancialSituationMemory:
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
         return [{"record": asdict(self.records[i]), "score": scores[i]} for i in top_indices if scores[i] > 0]
 
+# Singleton-like getter
 _memories = {}
 def get_memory(role: str) -> FinancialSituationMemory:
     if role not in _memories:
