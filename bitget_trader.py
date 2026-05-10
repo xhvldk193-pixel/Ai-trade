@@ -214,7 +214,7 @@ class BitgetClient:
 
     def set_tp(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
-        """익절(TP) 주문 등록."""
+        """익절(TP) 주문 등록. One-way 모드 기준 — holdSide 미전송."""
         try:
             return self._rest_post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       symbol if symbol.endswith("USDT") else f"{symbol}USDT",
@@ -231,7 +231,7 @@ class BitgetClient:
 
     def set_sl(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
-        """손절(SL) 주문 등록."""
+        """손절(SL) 주문 등록. One-way 모드 기준 — holdSide 미전송."""
         try:
             return self._rest_post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       symbol if symbol.endswith("USDT") else f"{symbol}USDT",
@@ -578,9 +578,11 @@ class BitgetAutoTrader:
                 log.info("[AutoTrader] 본전 이동 적용 — profit %.2f%% → SL=$%.2f",
                          profit_pct, new_sl)
 
-        # 새 TP/SL 적용 — 기존 plan 주문 모두 취소 후 신규 등록
+        # 새 TP/SL 방향 검증 — 진입가 기준으로 방향 오류 사전 차단
+        new_tp, new_sl = _validate_tpsl(side, cur, new_tp, new_sl, entry=entry)
+
         if new_tp is None and new_sl is None:
-            result["reason"] = "변경할 TP/SL 없음"
+            result["reason"] = "변경할 TP/SL 없음 (방향 검증 후 모두 무효)"
             return result
 
         try:
@@ -597,6 +599,8 @@ class BitgetAutoTrader:
                 result["applied_sl"] = float(new_sl)
             result["updated"] = True
             result["reason"] = "TP/SL 거래소 반영 완료"
+            log.info("[AutoTrader] TP/SL 갱신 완료 — side=%s entry=%.2f tp=%s sl=%s",
+                     side, entry, result["applied_tp"], result["applied_sl"])
         except Exception as e:
             result["reason"] = f"TP/SL 등록 실패: {e}"
             log.warning("[AutoTrader] %s", result["reason"])
