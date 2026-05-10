@@ -221,6 +221,19 @@ class FinancialSituationMemory:
                     return True
         return False
 
+    def update_meta(self, timestamp: str, new_meta: dict) -> bool:
+        """특정 timestamp 기록의 meta 를 부분 업데이트 (기존 키 유지, 신규 키 추가/덮어쓰기)."""
+        norm_target = self._norm_ts(timestamp)
+        with self._lock:
+            for r in self._records:
+                if self._norm_ts(r.timestamp) == norm_target or r.timestamp == timestamp:
+                    if r.meta is None:
+                        r.meta = {}
+                    r.meta.update(new_meta)
+                    self._rewrite_disk()
+                    return True
+        return False
+
     @staticmethod
     def _jaccard(a: list[str], b: list[str]) -> float:
         """토큰 집합 간 Jaccard 유사도 (0~1)."""

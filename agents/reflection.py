@@ -353,33 +353,51 @@ def reflect_for_role(
 
     if _tp or _sl:
         tpsl_lines = ["\n[매매 파라미터 사후 평가]"]
-        if _tp:
-            _tp_reached = (
-                (_signal == "매수" and _ph >= _tp) or
-                (_signal == "매도" and _pl <= _tp)
-            )
-            tpsl_lines.append(
-                f"목표가(TP): ${_tp:,.2f} → {'✅ 도달' if _tp_reached else '❌ 미도달'}"
-                f" (구간 {'최고' if _signal=='매수' else '최저'}가 ${_ph if _signal=='매수' else _pl:,.2f})"
-            )
+
+        # SL 먼저 판단 — 동시 발동 시 SL 우선 (손절이 먼저일 가능성 높음)
+        _sl_hit = False
         if _sl:
             _sl_hit = (
                 (_signal == "매수" and _pl <= _sl) or
                 (_signal == "매도" and _ph >= _sl)
             )
+
+        _tp_reached = False
+        if _tp:
+            _tp_raw = (
+                (_signal == "매수" and _ph >= _tp) or
+                (_signal == "매도" and _pl <= _tp)
+            )
+            # SL이 먼저 터졌으면 TP 도달 무효
+            _tp_reached = _tp_raw and not _sl_hit
+
+        if _tp:
+            if _sl_hit and (_tp_raw if _tp else False):
+                _tp_label = "❌ 미도달 (SL 선행)"
+            elif _tp_reached:
+                _tp_label = "✅ 도달"
+            else:
+                _tp_label = "❌ 미도달"
+            tpsl_lines.append(
+                f"목표가(TP): ${_tp:,.2f} → {_tp_label}"
+                f" (구간 {'최고' if _signal=='매수' else '최저'}가 ${_ph if _signal=='매수' else _pl:,.2f})"
+            )
+            # FibStats TP 기록
+            try:
+                from agents.fib_stats import record_from_reflection as _rfr
+                _fib_ext = _meta.get("fib_ext")
+                _fib_dir = _meta.get("fib_direction")
+                if _fib_ext and _fib_dir:
+                    _rfr(_fib_dir, float(_fib_ext), bool(_tp_reached))
+            except Exception:
+                pass
+
+        if _sl:
             tpsl_lines.append(
                 f"손절가(SL): ${_sl:,.2f} → {'🔴 손절 발생' if _sl_hit else '✅ 미터치'}"
                 f" (구간 {'최저' if _signal=='매수' else '최고'}가 ${_pl if _signal=='매수' else _ph:,.2f})"
             )
-        # 되돌림 깊이 평가
-        if _signal == "매수" and _sl:
-            _pullback_pct = (price_then - _pl) / price_then * 100 if _pl < price_then else 0
-            if _pullback_pct > 0:
-                tpsl_lines.append(
-                    f"되돌림 깊이: -{_pullback_pct:.2f}% "
-                    f"(진입가 대비 ${price_then - _pl:,.2f} 최저)"
-                )
-        tpsl_block = "\n".join(tpsl_lines)
+
 
     if _is_missed:
         missed_block = (
