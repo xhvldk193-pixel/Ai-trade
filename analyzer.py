@@ -66,6 +66,8 @@ SYSTEM_PROMPT = (
     "4. 5m는 진입 타이밍 힌트일 뿐, 큰 방향의 핵심 근거로 과대평가하지 마세요.\n"
     "5. 계좌/포지션 정보와 최근 운영 맥락은 시장 방향의 근거가 아니라 실행 제약입니다.\n"
     "   오픈 포지션이 있을 경우 신규 진입 대신 현재 포지션 관리를 우선적으로 분석하세요.\n"
+    "   ★ 포지션 보유 중에는 [매매 파라미터]를 신규 진입 기준이 아닌 현재 포지션 관리 레벨로 작성하세요.\n"
+    "   ★ [대응] 섹션에 추가 진입 조언은 절대 작성하지 마세요. 포지션 관리(SL이동/TP조정/청산조건)만 작성하세요.\n"
     "6. 최근 계좌 운영 맥락이 보이면 수익 보호 모드인지, 손실 복구 시도인지 읽되 관측된 사실에 기대어 표현하세요.\n"
     "7. 박스권(레인지) 레짐 특별 규칙:\n"
     "   - 상단 저항 ±0.3% 영역: 숏만 허용\n"
@@ -147,7 +149,7 @@ USER_PROMPT_TEMPLATE = """분석 기준 시각: {now_kst} (KST)
 • 상방 돌파 트리거: $[숫자 또는 N/A]
 • 하방 이탈 트리거: $[숫자 또는 N/A]
 
-📝 대응
+📝 대응{position_management_note}
 • 공격적: [지금 즉시 취할 구체적 행동 — 진입 방향·레벨·조건]
 • 보수적: [관망이 필요하다면 그 조건, 불필요한 관망은 쓰지 마세요]
 
@@ -288,11 +290,12 @@ def _build_context_blob(
                         f"\n  {_side} {_qty}계약  진입가 ${_entry:,.2f}"
                         f"  미실현 ${_upnl:+,.2f} ({_upnl_r*100:+.2f}%)  레버리지 {_p_lev}x"
                     )
-                # 포지션 있으면 추가 리스크 경고
+                # 포지션 있으면 리스크 경고 + 신규 진입 금지 명시
                 _total_upnl = sum(float(p.get("unrealizedPL", 0) or 0) for p in _positions)
                 if _equity > 0:
                     _risk_pct = abs(_total_upnl) / _equity * 100
                     bitget_ctx += f"\n  ⚠️ 현재 미실현 리스크: 잔고의 {_risk_pct:.1f}%"
+                bitget_ctx += "\n  🚫 포지션 보유 중 — 신규 진입 금지. 기존 포지션 관리(SL/TP 조정·청산)만 분석하세요."
             else:
                 bitget_ctx += "\n  현재 포지션: 없음 (신규 진입 가능)"
 
@@ -424,12 +427,23 @@ def build_prompt(
     else:
         debate_separator = ""
 
+    # 포지션 보유 중이면 [대응] 섹션에 신규 진입 금지 명시
+    _has_open_position = "신규 진입 금지" in context_blob
+    if _has_open_position:
+        _pos_note = (
+            " ← 🚫 포지션 보유 중. 추가 진입 조언 금지.\n"
+            "  공격적/보수적 모두 현재 포지션 관리(SL이동·TP조정·청산조건)만 작성하세요."
+        )
+    else:
+        _pos_note = ""
+
     return USER_PROMPT_TEMPLATE.format(
         now_kst=now_kst_label,
         pair_label=PAIR_LABEL,
         context_blob=context_blob,
         debate_block_separator=debate_separator,
         debate_block=debate_block,
+        position_management_note=_pos_note,
     )
 
 
