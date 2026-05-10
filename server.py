@@ -1758,7 +1758,7 @@ class AnalysisManager:
                             _tg(msg)
 
                         # 거래소 TP/SL 실제 업데이트
-                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "false").lower() == "true":
+                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "true").lower() == "true":   # 기본 활성화
                             try:
                                 update_result = await asyncio.to_thread(
                                     _auto_trader.update_position_tpsl,
@@ -2144,6 +2144,9 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                     f"{_action.upper()} 진입 실행\n"
                     f"진입가 ${_entry:,.2f} | TP {_tp_str} | SL {_sl_str}"
                 )
+                # fib_ext / fib_direction: Reflection → FibStats TP 도달률 학습에 사용
+                _fib_direction = "long" if _action == "long" else "short"
+                _fib_ext = (trade_levels or {}).get("fib_ext")
                 _trade_mem.add_situation(
                     situation=_trade_situation,
                     advice=_trade_advice,
@@ -2158,6 +2161,8 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                         "tp": _tp,
                         "sl": _sl,
                         "missed": False,
+                        "fib_ext": _fib_ext,
+                        "fib_direction": _fib_direction,
                     }
                 )
                 import logging as _lg2

@@ -283,16 +283,31 @@ class BitgetClient:
         return self._rest_post("/api/v2/mix/order/place-plan-order", body)
 
     def cancel_all_tpsl(self, symbol: str) -> dict:
-        """TP/SL 플랜 주문 전체 취소."""
+        """TP/SL + 진입 트리거(normal_plan) 플랜 주문 전체 취소."""
+        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
+        results = {}
+        # TP/SL 취소
         try:
-            ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
-            return self._ex.cancel_all_orders(ccxt_symbol, params={
+            results["tpsl"] = self._ex.cancel_all_orders(ccxt_symbol, params={
                 "planType":    "profit_loss",
                 "productType": "USDT-FUTURES",
             })
         except Exception as e:
             log.warning("[Bitget] TP/SL 취소 실패(무시): %s", e)
-            return {}
+        # 진입 트리거 주문(normal_plan) 전체 취소 — 중복 등록 방지
+        try:
+            results["trigger"] = self._rest_post(
+                "/api/v2/mix/order/cancel-all-plan-orders",
+                {
+                    "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
+                    "productType": "USDT-FUTURES",
+                    "marginCoin":  "USDT",
+                    "planType":    "normal_plan",
+                }
+            )
+        except Exception as e:
+            log.warning("[Bitget] 진입 트리거 취소 실패(무시): %s", e)
+        return results
 
     def _tg_alert(self, msg: str):
         _tg.send(msg)

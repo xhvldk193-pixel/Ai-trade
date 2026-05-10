@@ -305,46 +305,75 @@ def _build_context_blob(
     except Exception as _bg_exc:
         account_context_str += f"\n[비트겟 데이터]\n  수집 실패 — {_bg_exc}"
 
-    # ATR + 구조적 SL/TP 후보 계산 (데이트레이딩 기준)
-    # ┌ 기준 TF 우선순위: 1h(단기 스윙) → 4h(구조 참고)
-    # └ 오늘 안에 승부가 나야 하므로 1h 스윙이 주 기준, 4h는 상위 구조 경고용
+    # SL/TP 후보 계산 (데이트레이딩 기준)
+    # SL = 피보나치 스윙 저점/고점 (구조적 근거 우선)
+    #      ATR×0.5 = 최소 거리 하한 (노이즈 손절 방지용)
+    # TP = 피보나치 연장선 (FibStats 도달률 우선순위)
+    # ATR = 저변동성 진입 필터용으로만 활용
+    _chosen_fib = {"long": None, "short": None}   # try 밖에서 미리 초기화 — 예외 시에도 안전
     try:
         MIN_RR = 1.5
+        ATR_MIN_FLOOR = 0.5   # SL 최소 거리: ATR×0.5 하한
 
-        def _calc_tpsl_block(df, tf_label, atr_mult_sl=1.0):
-            """주어진 df/tf 기준으로 SL(스윙+ATR) / TP(피보 연장선) 계산."""
+        # ── FibStats 로드 (TP 연장선 우선순위) ──────────────────────────
+        try:
+            from agents.fib_stats import get_fib_stats as _gfs
+            _fib_stats       = _gfs()
+            _long_ext_order  = _fib_stats.preferred_extensions("long")
+            _short_ext_order = _fib_stats.preferred_extensions("short")
+            _fib_stats_note  = _fib_stats.log_summary()
+        except Exception:
+            _fib_stats       = None
+            _long_ext_order  = (1.272, 1.618, 2.0)
+            _short_ext_order = (1.272, 1.618, 2.0)
+            _fib_stats_note  = ""
+
+        def _calc_tpsl_block(df, tf_label):
+            """
+            SL: 스윙 저점/고점 기준 (피보나치 구조)
+                ATR×0.5 보다 가까우면 ATR 하한 적용
+            TP: FibStats 도달률 우선순위 + R:R 1.5 보장
+            """
             atr_col = df["atr"] if "atr" in df.columns else None
             if atr_col is None or len(atr_col) == 0:
                 return None
-            atr_v     = float(atr_col.iloc[-1])
-            cur       = float(df.iloc[-1]["close"])
+            atr_v = float(atr_col.iloc[-1])
+            cur   = float(df.iloc[-1]["close"])
             if atr_v <= 0:
                 return None
 
+            # 저변동성 감지 (ATR < 현재가×0.2%) → 진입 경고 플래그
+            _atr_pct = atr_v / cur * 100
+            _low_vol = _atr_pct < 0.2
+
             sw = fibonacci_swing_levels(df, window=fib_window_for_tf(tf_label))
             if not sw:
-                return {"atr": atr_v, "cur": cur, "sw": None}
+                return {"atr": atr_v, "cur": cur, "sw": None, "low_vol": _low_vol}
 
             sw_low  = sw["swing_low"]
             sw_high = sw["swing_high"]
             sw_diff = sw_high - sw_low
 
-            # SL: 스윙 고저점 vs ATR 최소폭 → 더 넓은 쪽
-            sl_long  = min(round(sw_low  * 0.999, 1), round(cur - atr_v * atr_mult_sl, 1))
-            sl_short = max(round(sw_high * 1.001, 1), round(cur + atr_v * atr_mult_sl, 1))
+            # SL: 스윙 저점/고점 기준, ATR×0.5 최소 거리 보장
+            _sl_long_swing  = round(sw_low  * 0.999, 1)
+            _sl_short_swing = round(sw_high * 1.001, 1)
+            _atr_floor_long  = round(cur - atr_v * ATR_MIN_FLOOR, 1)
+            _atr_floor_short = round(cur + atr_v * ATR_MIN_FLOOR, 1)
+            sl_long  = min(_sl_long_swing,  _atr_floor_long)
+            sl_short = max(_sl_short_swing, _atr_floor_short)
             sl_long_dist  = cur - sl_long
             sl_short_dist = sl_short - cur
 
-            # TP: R:R 1.5 이상 만족하는 최소 피보나치 연장선
+            # TP: FibStats 도달률 우선 + R:R 1.5 보장
             def pick_tp_long(sl_d):
-                for ext in (1.272, 1.618, 2.0):
+                for ext in _long_ext_order:
                     tp = round(sw_low + sw_diff * ext, 1)
                     if sl_d > 0 and (tp - cur) / sl_d >= MIN_RR:
                         return tp, ext
                 return round(cur + sl_d * 2.5, 1), None
 
             def pick_tp_short(sl_d):
-                for ext in (1.272, 1.618, 2.0):
+                for ext in _short_ext_order:
                     tp = round(sw_high - sw_diff * ext, 1)
                     if sl_d > 0 and (cur - tp) / sl_d >= MIN_RR:
                         return tp, ext
@@ -356,18 +385,19 @@ def _build_context_blob(
             rr_short = round((cur - tp_short) / sl_short_dist, 2) if sl_short_dist > 0 else 0
 
             return {
-                "atr": atr_v, "cur": cur, "sw": sw,
+                "atr": atr_v, "cur": cur, "sw": sw, "low_vol": _low_vol,
                 "sw_low": sw_low, "sw_high": sw_high,
-                "sl_long": sl_long, "sl_short": sl_short,
-                "tp_long": tp_long, "ext_long": ext_long, "rr_long": rr_long,
+                "sl_long": sl_long,  "sl_short": sl_short,
+                "sl_long_swing": _sl_long_swing, "sl_short_swing": _sl_short_swing,
+                "tp_long": tp_long,  "ext_long": ext_long,  "rr_long": rr_long,
                 "tp_short": tp_short, "ext_short": ext_short, "rr_short": rr_short,
             }
 
-        # ── 1h: 주 기준 (데이트레이딩 — 오늘 안 승부) ──────────────────
+        # ── 1h: 주 기준 (데이트레이딩) ──────────────────────────────────
         _r1h = None
         if "1h" in multi_tf_data:
             try:
-                _r1h = _calc_tpsl_block(multi_tf_data["1h"], "1h", atr_mult_sl=1.0)
+                _r1h = _calc_tpsl_block(multi_tf_data["1h"], "1h")
             except Exception:
                 pass
 
@@ -375,28 +405,42 @@ def _build_context_blob(
         _r4h = None
         if "4h" in multi_tf_data:
             try:
-                _r4h = _calc_tpsl_block(multi_tf_data["4h"], "4h", atr_mult_sl=1.0)
+
+                _r4h = _calc_tpsl_block(multi_tf_data["4h"], "4h")
             except Exception:
                 pass
 
+        # 선택된 fib_ext를 외부로 노출 (analyze_with_claude 반환값에 포함)
+        _chosen_fib = {"long": None, "short": None}
+        _base_r = _r1h if (_r1h and _r1h.get("sw")) else (_r4h if (_r4h and _r4h.get("sw")) else None)
+        if _base_r:
+            _chosen_fib["long"]  = _base_r.get("ext_long")
+            _chosen_fib["short"] = _base_r.get("ext_short")
+
         # ── 프롬프트 조립 ────────────────────────────────────────────────
-        if _r1h and _r1h.get("sw"):
-            r = _r1h
+        def _fmt_tpsl_block(r, tf_label):
             sw = r["sw"]
-            ext_l = f"Fib {r['ext_long']}"   if r["ext_long"]  else "ATR×2.5 폴백"
-            ext_s = f"Fib {r['ext_short']}"  if r["ext_short"] else "ATR×2.5 폴백"
-            account_context_str += (
-                f"\n[ATR & 구조적 매매 레벨] ← 데이트레이딩 기준 (1h 스윙)"
-                f"\n  1h ATR: ${r['atr']:,.2f}"
-                f"\n  1h 스윙 저점: ${r['sw_low']:,.1f} ({sw['swing_low_ago']}봉 전)"
-                f"  1h 스윙 고점: ${r['sw_high']:,.1f} ({sw['swing_high_ago']}봉 전)"
+            ext_l = f"Fib {r['ext_long']}"  if r["ext_long"]  else "SL×2.5 폴백"
+            ext_s = f"Fib {r['ext_short']}" if r["ext_short"] else "SL×2.5 폴백"
+            vol_warn = "\n  ⚠️ 저변동성 구간 — 진입 보류 권고 (ATR < 0.2%)" if r.get("low_vol") else ""
+            # SL 근거 표시: 스윙 기준인지 ATR 하한인지
+            _sl_l_src = "스윙저점" if r["sl_long"]  == r.get("sl_long_swing")  else f"ATR×{ATR_MIN_FLOOR} 하한"
+            _sl_s_src = "스윙고점" if r["sl_short"] == r.get("sl_short_swing") else f"ATR×{ATR_MIN_FLOOR} 하한"
+            return (
+                f"\n[구조적 매매 레벨] ← {tf_label} 스윙 기준{vol_warn}"
+                f"\n  {tf_label} ATR: ${r['atr']:,.2f}"
+                f"\n  스윙 저점: ${r['sw_low']:,.1f} ({sw['swing_low_ago']}봉 전)"
+                f"  /  스윙 고점: ${r['sw_high']:,.1f} ({sw['swing_high_ago']}봉 전)"
                 f"\n  ─ 롱 기준 ─"
-                f"\n    SL 후보: ${r['sl_long']:,.1f}  TP 후보: ${r['tp_long']:,.1f} ({ext_l})  R:R {r['rr_long']:.2f}"
+                f"\n    SL: ${r['sl_long']:,.1f} ({_sl_l_src})  TP: ${r['tp_long']:,.1f} ({ext_l})  R:R {r['rr_long']:.2f}"
                 f"\n  ─ 숏 기준 ─"
-                f"\n    SL 후보: ${r['sl_short']:,.1f}  TP 후보: ${r['tp_short']:,.1f} ({ext_s})  R:R {r['rr_short']:.2f}"
-                f"\n  ※ TP = R:R {MIN_RR} 이상 최소 피보나치 연장선(1.272→1.618→2.0) 자동 선택."
+                f"\n    SL: ${r['sl_short']:,.1f} ({_sl_s_src})  TP: ${r['tp_short']:,.1f} ({ext_s})  R:R {r['rr_short']:.2f}"
+                f"\n  ※ SL = 스윙 저점/고점 기준 (ATR×{ATR_MIN_FLOOR} 최소 거리 보장)"
+                f"  TP = R:R {MIN_RR} 이상 피보나치 연장선 자동 선택."
             )
-            # 4h 구조 레벨을 경고 참고용으로 추가
+
+        if _r1h and _r1h.get("sw"):
+            account_context_str += _fmt_tpsl_block(_r1h, "1h")
             if _r4h and _r4h.get("sw"):
                 r4 = _r4h
                 account_context_str += (
@@ -404,22 +448,7 @@ def _build_context_blob(
                     f" — 이 레벨 인근에서 1h 신호와 충돌 시 진입 재고."
                 )
         elif _r4h and _r4h.get("sw"):
-            # 1h 스윙 실패 시 4h 폴백
-            r = _r4h
-            sw = r["sw"]
-            ext_l = f"Fib {r['ext_long']}"  if r["ext_long"]  else "ATR×2.5 폴백"
-            ext_s = f"Fib {r['ext_short']}" if r["ext_short"] else "ATR×2.5 폴백"
-            account_context_str += (
-                f"\n[ATR & 구조적 매매 레벨] ← 1h 스윙 계산 불가, 4h 폴백"
-                f"\n  4h ATR: ${r['atr']:,.2f}"
-                f"\n  4h 스윙 저점: ${r['sw_low']:,.1f} ({sw['swing_low_ago']}봉 전)"
-                f"  4h 스윙 고점: ${r['sw_high']:,.1f} ({sw['swing_high_ago']}봉 전)"
-                f"\n  ─ 롱 기준 ─"
-                f"\n    SL 후보: ${r['sl_long']:,.1f}  TP 후보: ${r['tp_long']:,.1f} ({ext_l})  R:R {r['rr_long']:.2f}"
-                f"\n  ─ 숏 기준 ─"
-                f"\n    SL 후보: ${r['sl_short']:,.1f}  TP 후보: ${r['tp_short']:,.1f} ({ext_s})  R:R {r['rr_short']:.2f}"
-                f"\n  ※ TP = R:R {MIN_RR} 이상 최소 피보나치 연장선 자동 선택."
-            )
+            account_context_str += _fmt_tpsl_block(_r4h, "4h")
         elif _r1h:
             # 스윙 없음, ATR만
             account_context_str += (
@@ -515,6 +544,7 @@ def _build_context_blob(
             "macro": macro_payload,
             "market": market_ctx,
             "account": account_ctx,
+            "chosen_fib": _chosen_fib,
         }
     return context_blob
 
@@ -893,6 +923,27 @@ def analyze_with_claude(
     )
     signal, confidence = parse_signal(raw_text)
     trade_levels = parse_trade_levels(raw_text)
+    # fib_ext / atr_mult: Reflection → FibStats 학습용 메타
+    try:
+        _sig_tmp, _ = parse_signal(raw_text)
+
+        # 버그3 수정: 홀드 신호면 fib_direction 기록 자체를 스킵
+        if _sig_tmp in ("매수", "매도"):
+            _fib_dir_tmp = "long" if _sig_tmp == "매수" else "short"
+
+            from agents.fib_stats import get_fib_stats as _gfs2
+            _fs2 = _gfs2()
+
+            # 버그1 수정: preferred_extensions[0] 대신 실제 pick된 ext 사용
+            # raw_ctx["chosen_fib"]에 실제 선택값이 담겨 있음
+            _chosen = raw_ctx.get("chosen_fib", {})
+            _actual_ext = _chosen.get(_fib_dir_tmp)  # 실제 pick된 연장선
+
+            trade_levels["fib_ext"]       = _actual_ext   # 실제 사용값
+            trade_levels["fib_direction"] = _fib_dir_tmp
+            # atr_mult 제거: SL은 피보나치 스윙 기준으로 변경, ATR 배수 학습 불필요
+    except Exception:
+        pass
     report_meta = parse_report_sections(raw_text)
     claude_leverage = parse_leverage(raw_text)
 
