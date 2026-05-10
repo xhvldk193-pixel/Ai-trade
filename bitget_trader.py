@@ -246,6 +246,42 @@ class BitgetClient:
             self._tg_alert(f"⚠️ SL 등록 실패\n{str(e)[:200]}")
             raise
 
+    def place_plan_order(self, symbol: str, side: str, size: float,
+                         trigger_price: float, order_price: float = None,
+                         tp: float = None, sl: float = None) -> dict:
+        """
+        트리거(조건부) 진입 주문 — place-plan-order API.
+        trigger_price 도달 시 order_price(지정가) 또는 시장가로 체결.
+
+        side: "open_long" | "open_short"
+        order_price: None이면 시장가(market), 값 있으면 지정가(limit)
+        """
+        action_map = {
+            "open_long":   ("buy",  "open"),
+            "open_short":  ("sell", "open"),
+        }
+        trade_side, trade_type = action_map.get(side, ("buy", "open"))
+        body = {
+            "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
+            "productType": "USDT-FUTURES",
+            "marginMode":  "isolated",
+            "marginCoin":  "USDT",
+            "planType":    "normal_plan",
+            "size":        str(size),
+            "side":        trade_side,
+            "tradeSide":   trade_type,
+            "triggerPrice": str(trigger_price),
+            "triggerType": "mark_price",
+            "orderType":   "limit" if order_price else "market",
+        }
+        if order_price:
+            body["price"] = str(order_price)
+        if tp:
+            body["presetStopSurplusPrice"] = str(tp)
+        if sl:
+            body["presetStopLossPrice"] = str(sl)
+        return self._rest_post("/api/v2/mix/order/place-plan-order", body)
+
     def cancel_all_tpsl(self, symbol: str) -> dict:
         """TP/SL 플랜 주문 전체 취소."""
         try:
@@ -473,29 +509,67 @@ class BitgetAutoTrader:
 
         order_side = "open_long" if desired == "long" else "open_short"
 
-        # 진입가 기반 시장가/지정가 결정
-        # 0.2% 버퍼: 되돌림이 진입가 근처까지만 와도 체결되도록
+        # ── 진입가 기반 시장가 / 트리거 주문 결정 ──────────────────────────────
+        # ENTRY_BUFFER(기본 0.2%): 돌파 직후 소폭 위에서도 시장가 허용하는 슬리피지 여유
         ENTRY_BUFFER = float(os.environ.get("AUTO_TRADE_ENTRY_BUFFER", "0.002"))
         entry_price = trade_levels.get("entry") if trade_levels else None
-        use_limit = False
+        use_limit   = False
+        use_trigger = False   # 미돌파 → 거래소에 트리거 주문 등록
+
         if entry_price and price:
-            if desired == "long" and price > entry_price:
-                # 롱: 현재가가 진입가보다 높으면 지정가
-                # 버퍼 적용: entry_price * (1 + 0.2%) 까지 허용
-                buffered_entry = entry_price * (1 + ENTRY_BUFFER)
-                if price <= buffered_entry:
-                    # 버퍼 안에 들어오면 현재가로 시장가 진입
-                    entry_price = None
+            if desired == "long":
+                if price >= entry_price:
+                    # ✅ 이미 돌파 — 버퍼 내면 시장가, 초과하면 지정가(되돌림 대기)
+                    buffered_entry = entry_price * (1 + ENTRY_BUFFER)
+                    if price > buffered_entry:
+                        use_limit = True
+                        log.info("[AutoTrader] 롱 — 버퍼 초과(현재가 $%.2f) → 지정가 되돌림 대기", price)
+                    else:
+                        entry_price = None   # 시장가
+                        log.info("[AutoTrader] 롱 — 돌파 확인(버퍼 이내) → 시장가 진입")
                 else:
-                    use_limit = True
-            elif desired == "short" and price < entry_price:
-                # 숏: 현재가가 진입가보다 낮으면 지정가
-                # 버퍼 적용: entry_price * (1 - 0.2%) 까지 허용
-                buffered_entry = entry_price * (1 - ENTRY_BUFFER)
-                if price >= buffered_entry:
-                    entry_price = None
+                    # ⏳ 미돌파 → 트리거 주문 등록
+                    use_trigger = True
+                    log.info("[AutoTrader] 롱 — 미돌파(현재가 $%.2f < 진입가 $%.2f) → 트리거 주문 등록",
+                             price, entry_price)
+
+            elif desired == "short":
+                if price <= entry_price:
+                    buffered_entry = entry_price * (1 - ENTRY_BUFFER)
+                    if price < buffered_entry:
+                        use_limit = True
+                        log.info("[AutoTrader] 숏 — 버퍼 초과 하락(현재가 $%.2f) → 지정가 되돌림 대기", price)
+                    else:
+                        entry_price = None
+                        log.info("[AutoTrader] 숏 — 이탈 확인(버퍼 이내) → 시장가 진입")
                 else:
-                    use_limit = True
+                    use_trigger = True
+                    log.info("[AutoTrader] 숏 — 미이탈(현재가 $%.2f > 진입가 $%.2f) → 트리거 주문 등록",
+                             price, entry_price)
+
+        if use_trigger and entry_price:
+            # 트리거가 울리면 entry_price 지정가로 체결 (슬리피지 방지)
+            # 롱: 트리거=entry_price, 체결가=entry_price (limit)
+            # 숏: 동일
+            order_resp = self.client.place_plan_order(
+                self.symbol, order_side, size,
+                trigger_price=entry_price,
+                order_price=entry_price,   # 지정가 체결
+                tp=tp, sl=sl,
+            )
+            result["action"] = desired
+            result["order"]  = order_resp
+            result["reason"] = (
+                f"{signal} (확신도 {confidence}%) → 트리거 주문 등록 @ ${entry_price:,.2f} "
+                f"(현재가 ${price:,.2f} 미돌파, 도달 시 자동 체결)"
+                + (f" | TP ${tp:,.2f}" if tp else " | TP 없음")
+                + (f" | SL ${sl:,.2f}" if sl else " | SL 없음")
+            )
+            log.info("[AutoTrader] %s", result["reason"])
+            result["tp_order"] = {"included_in_order": True} if tp else None
+            result["sl_order"] = {"included_in_order": True} if sl else None
+            self._last = result
+            return result
 
         if use_limit and entry_price:
             order_resp = self.client.place_order(self.symbol, order_side, size, order_type="limit", price=entry_price, tp=tp, sl=sl)

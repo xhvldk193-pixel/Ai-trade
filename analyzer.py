@@ -305,74 +305,134 @@ def _build_context_blob(
     except Exception as _bg_exc:
         account_context_str += f"\n[비트겟 데이터]\n  수집 실패 — {_bg_exc}"
 
-    # ATR + 구조적 SL/TP 후보 계산
-    # 코드에서 스윙 고저점을 직접 계산해 AI에게 전달 — AI가 직접 계산하면 부정확
+    # ATR + 구조적 SL/TP 후보 계산 (데이트레이딩 기준)
+    # ┌ 기준 TF 우선순위: 1h(단기 스윙) → 4h(구조 참고)
+    # └ 오늘 안에 승부가 나야 하므로 1h 스윙이 주 기준, 4h는 상위 구조 경고용
     try:
-        if "4h" in multi_tf_data:
-            df_4h = multi_tf_data["4h"]
-            atr_col = df_4h["atr"] if "atr" in df_4h.columns else None
-            if atr_col is not None and len(atr_col) > 0:
-                atr_val = float(atr_col.iloc[-1])
-                cur_price = float(df_4h.iloc[-1]["close"])
-                if atr_val > 0:
-                    # 구조적 SL/TP 후보: 직전 4h 스윙 고저점
-                    try:
-                        _sw = fibonacci_swing_levels(df_4h, window=fib_window_for_tf("4h"))
-                        if _sw:
-                            _sw_low  = _sw["swing_low"]
-                            _sw_high = _sw["swing_high"]
-                            # 롱 SL 후보: 스윙 저점 -0.1% / ATR 기준 중 더 넓은 쪽
-                            _sl_long_swing  = round(_sw_low  * 0.999, 1)
-                            _sl_short_swing = round(_sw_high * 1.001, 1)
-                            # ATR 기반 최소 SL 거리
-                            _sl_long_atr   = round(cur_price - atr_val * 1.0, 1)
-                            _sl_short_atr  = round(cur_price + atr_val * 1.0, 1)
-                            # 구조적 레벨이 ATR 기준보다 타이트하면 ATR 사용
-                            _sl_long_final  = min(_sl_long_swing,  _sl_long_atr)
-                            _sl_short_final = max(_sl_short_swing, _sl_short_atr)
-                            # TP 후보: 스윙 고점(롱) / 스윙 저점(숏)
-                            _tp_long_swing  = round(_sw_high * 0.999, 1)
-                            _tp_short_swing = round(_sw_low  * 1.001, 1)
-                            # RR 검증 (1.5 이상)
-                            _long_sl_dist  = cur_price - _sl_long_final
-                            _long_tp_dist  = _tp_long_swing - cur_price
-                            _short_sl_dist = _sl_short_final - cur_price
-                            _short_tp_dist = cur_price - _tp_short_swing
-                            _long_rr  = round(_long_tp_dist  / _long_sl_dist,  2) if _long_sl_dist  > 0 else 0
-                            _short_rr = round(_short_tp_dist / _short_sl_dist, 2) if _short_sl_dist > 0 else 0
+        MIN_RR = 1.5
 
-                            account_context_str += (
-                                f"\n[ATR & 구조적 매매 레벨]"
-                                f"\n  4h ATR: ${atr_val:,.2f}"
-                                f"\n  4h 스윙 저점: ${_sw_low:,.1f} ({_sw['swing_low_ago']}봉 전)"
-                                f"  4h 스윙 고점: ${_sw_high:,.1f} ({_sw['swing_high_ago']}봉 전)"
-                                f"\n  ─ 롱 기준 ─"
-                                f"\n    SL 후보: ${_sl_long_final:,.1f}"
-                                f" (스윙저점 ${_sl_long_swing:,.1f} vs ATR1.0배 ${_sl_long_atr:,.1f} → 더 넓은 값)"
-                                f"\n    TP 후보: ${_tp_long_swing:,.1f} (스윙고점 기준)"
-                                f"  R:R {_long_rr:.2f}"
-                                f"\n  ─ 숏 기준 ─"
-                                f"\n    SL 후보: ${_sl_short_final:,.1f}"
-                                f" (스윙고점 ${_sl_short_swing:,.1f} vs ATR1.0배 ${_sl_short_atr:,.1f} → 더 넓은 값)"
-                                f"\n    TP 후보: ${_tp_short_swing:,.1f} (스윙저점 기준)"
-                                f"  R:R {_short_rr:.2f}"
-                                f"\n  ※ R:R 1.5 미달 시 ATR × 1.5~2.0 으로 TP 확장하세요."
-                            )
-                        else:
-                            # 스윙 계산 실패 시 ATR만 제공
-                            account_context_str += (
-                                f"\n[ATR]\n  4h ATR: ${atr_val:,.2f} | "
-                                f"SL권고(1.0배): ${atr_val*1.0:,.2f} | "
-                                f"SL권고(1.5배): ${atr_val*1.5:,.2f} | "
-                                f"SL권고(2.0배): ${atr_val*2.0:,.2f}"
-                            )
-                    except Exception:
-                        account_context_str += (
-                            f"\n[ATR]\n  4h ATR: ${atr_val:,.2f} | "
-                            f"SL권고(1.0배): ${atr_val*1.0:,.2f} | "
-                            f"SL권고(1.5배): ${atr_val*1.5:,.2f} | "
-                            f"SL권고(2.0배): ${atr_val*2.0:,.2f}"
-                        )
+        def _calc_tpsl_block(df, tf_label, atr_mult_sl=1.0):
+            """주어진 df/tf 기준으로 SL(스윙+ATR) / TP(피보 연장선) 계산."""
+            atr_col = df["atr"] if "atr" in df.columns else None
+            if atr_col is None or len(atr_col) == 0:
+                return None
+            atr_v     = float(atr_col.iloc[-1])
+            cur       = float(df.iloc[-1]["close"])
+            if atr_v <= 0:
+                return None
+
+            sw = fibonacci_swing_levels(df, window=fib_window_for_tf(tf_label))
+            if not sw:
+                return {"atr": atr_v, "cur": cur, "sw": None}
+
+            sw_low  = sw["swing_low"]
+            sw_high = sw["swing_high"]
+            sw_diff = sw_high - sw_low
+
+            # SL: 스윙 고저점 vs ATR 최소폭 → 더 넓은 쪽
+            sl_long  = min(round(sw_low  * 0.999, 1), round(cur - atr_v * atr_mult_sl, 1))
+            sl_short = max(round(sw_high * 1.001, 1), round(cur + atr_v * atr_mult_sl, 1))
+            sl_long_dist  = cur - sl_long
+            sl_short_dist = sl_short - cur
+
+            # TP: R:R 1.5 이상 만족하는 최소 피보나치 연장선
+            def pick_tp_long(sl_d):
+                for ext in (1.272, 1.618, 2.0):
+                    tp = round(sw_low + sw_diff * ext, 1)
+                    if sl_d > 0 and (tp - cur) / sl_d >= MIN_RR:
+                        return tp, ext
+                return round(cur + sl_d * 2.5, 1), None
+
+            def pick_tp_short(sl_d):
+                for ext in (1.272, 1.618, 2.0):
+                    tp = round(sw_high - sw_diff * ext, 1)
+                    if sl_d > 0 and (cur - tp) / sl_d >= MIN_RR:
+                        return tp, ext
+                return round(cur - sl_d * 2.5, 1), None
+
+            tp_long,  ext_long  = pick_tp_long(sl_long_dist)
+            tp_short, ext_short = pick_tp_short(sl_short_dist)
+            rr_long  = round((tp_long  - cur) / sl_long_dist,  2) if sl_long_dist  > 0 else 0
+            rr_short = round((cur - tp_short) / sl_short_dist, 2) if sl_short_dist > 0 else 0
+
+            return {
+                "atr": atr_v, "cur": cur, "sw": sw,
+                "sw_low": sw_low, "sw_high": sw_high,
+                "sl_long": sl_long, "sl_short": sl_short,
+                "tp_long": tp_long, "ext_long": ext_long, "rr_long": rr_long,
+                "tp_short": tp_short, "ext_short": ext_short, "rr_short": rr_short,
+            }
+
+        # ── 1h: 주 기준 (데이트레이딩 — 오늘 안 승부) ──────────────────
+        _r1h = None
+        if "1h" in multi_tf_data:
+            try:
+                _r1h = _calc_tpsl_block(multi_tf_data["1h"], "1h", atr_mult_sl=1.0)
+            except Exception:
+                pass
+
+        # ── 4h: 상위 구조 경고 참고용 ───────────────────────────────────
+        _r4h = None
+        if "4h" in multi_tf_data:
+            try:
+                _r4h = _calc_tpsl_block(multi_tf_data["4h"], "4h", atr_mult_sl=1.0)
+            except Exception:
+                pass
+
+        # ── 프롬프트 조립 ────────────────────────────────────────────────
+        if _r1h and _r1h.get("sw"):
+            r = _r1h
+            sw = r["sw"]
+            ext_l = f"Fib {r['ext_long']}"   if r["ext_long"]  else "ATR×2.5 폴백"
+            ext_s = f"Fib {r['ext_short']}"  if r["ext_short"] else "ATR×2.5 폴백"
+            account_context_str += (
+                f"\n[ATR & 구조적 매매 레벨] ← 데이트레이딩 기준 (1h 스윙)"
+                f"\n  1h ATR: ${r['atr']:,.2f}"
+                f"\n  1h 스윙 저점: ${r['sw_low']:,.1f} ({sw['swing_low_ago']}봉 전)"
+                f"  1h 스윙 고점: ${r['sw_high']:,.1f} ({sw['swing_high_ago']}봉 전)"
+                f"\n  ─ 롱 기준 ─"
+                f"\n    SL 후보: ${r['sl_long']:,.1f}  TP 후보: ${r['tp_long']:,.1f} ({ext_l})  R:R {r['rr_long']:.2f}"
+                f"\n  ─ 숏 기준 ─"
+                f"\n    SL 후보: ${r['sl_short']:,.1f}  TP 후보: ${r['tp_short']:,.1f} ({ext_s})  R:R {r['rr_short']:.2f}"
+                f"\n  ※ TP = R:R {MIN_RR} 이상 최소 피보나치 연장선(1.272→1.618→2.0) 자동 선택."
+            )
+            # 4h 구조 레벨을 경고 참고용으로 추가
+            if _r4h and _r4h.get("sw"):
+                r4 = _r4h
+                account_context_str += (
+                    f"\n  [4h 구조 참고] 스윙저점 ${r4['sw_low']:,.1f} / 스윙고점 ${r4['sw_high']:,.1f}"
+                    f" — 이 레벨 인근에서 1h 신호와 충돌 시 진입 재고."
+                )
+        elif _r4h and _r4h.get("sw"):
+            # 1h 스윙 실패 시 4h 폴백
+            r = _r4h
+            sw = r["sw"]
+            ext_l = f"Fib {r['ext_long']}"  if r["ext_long"]  else "ATR×2.5 폴백"
+            ext_s = f"Fib {r['ext_short']}" if r["ext_short"] else "ATR×2.5 폴백"
+            account_context_str += (
+                f"\n[ATR & 구조적 매매 레벨] ← 1h 스윙 계산 불가, 4h 폴백"
+                f"\n  4h ATR: ${r['atr']:,.2f}"
+                f"\n  4h 스윙 저점: ${r['sw_low']:,.1f} ({sw['swing_low_ago']}봉 전)"
+                f"  4h 스윙 고점: ${r['sw_high']:,.1f} ({sw['swing_high_ago']}봉 전)"
+                f"\n  ─ 롱 기준 ─"
+                f"\n    SL 후보: ${r['sl_long']:,.1f}  TP 후보: ${r['tp_long']:,.1f} ({ext_l})  R:R {r['rr_long']:.2f}"
+                f"\n  ─ 숏 기준 ─"
+                f"\n    SL 후보: ${r['sl_short']:,.1f}  TP 후보: ${r['tp_short']:,.1f} ({ext_s})  R:R {r['rr_short']:.2f}"
+                f"\n  ※ TP = R:R {MIN_RR} 이상 최소 피보나치 연장선 자동 선택."
+            )
+        elif _r1h:
+            # 스윙 없음, ATR만
+            account_context_str += (
+                f"\n[ATR]\n  1h ATR: ${_r1h['atr']:,.2f} | "
+                f"SL권고(1.0배): ${_r1h['atr']*1.0:,.2f} | "
+                f"SL권고(1.5배): ${_r1h['atr']*1.5:,.2f}"
+            )
+        elif _r4h:
+            account_context_str += (
+                f"\n[ATR]\n  4h ATR: ${_r4h['atr']:,.2f} | "
+                f"SL권고(1.0배): ${_r4h['atr']*1.0:,.2f} | "
+                f"SL권고(1.5배): ${_r4h['atr']*1.5:,.2f}"
+            )
     except Exception:
         pass
 
