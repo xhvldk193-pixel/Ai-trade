@@ -1726,14 +1726,66 @@ class AnalysisManager:
                 except Exception:
                     pass
 
-            # ── 포지션 있으면 분석 스킵 ──────
+            # ── 포지션 보유 여부 확인 (신규 진입 여부 판단용) ──────
+            _has_position = False
             if _auto_trader:
                 try:
                     _cur_pos = await asyncio.to_thread(_auto_trader.get_positions)
-                    if _cur_pos:
-                        return
+                    _has_position = bool(_cur_pos)
                 except Exception:
                     pass
+
+            # ── 포지션 있을 때: TP/SL 동적 업데이트 + 관리 알림 ──────
+            # 포지션 체크를 신규 진입 전으로 분리 — 이전 구조에서는 포지션 있으면
+            # return으로 종료해 TP/SL 업데이트가 절대 실행되지 않던 버그 수정.
+            if _auto_trader and _has_position:
+                try:
+                    positions = await asyncio.to_thread(_auto_trader.get_positions)
+                    if positions:
+                        trade_levels = analysis.get("trade_levels") or {}
+                        new_sl = trade_levels.get("stop")
+                        new_tp = trade_levels.get("target")
+                        for p in positions:
+                            side  = p.get("holdSide", "")
+                            entry = float(p.get("averageOpenPrice", 0) or 0)
+                            upnl  = float(p.get("unrealizedPL", 0) or 0)
+                            emoji = "🟢" if upnl >= 0 else "🔴"
+                            msg = f"📊 포지션 관리 알림\n{side.upper()} 진입가 ${entry:,.2f}\n미실현: {emoji}${upnl:+,.2f}\n"
+                            if new_sl:
+                                msg += f"AI 권고 손절: ${new_sl:,.2f}\n"
+                            if new_tp:
+                                msg += f"AI 권고 익절: ${new_tp:,.2f}"
+                            _tg(msg)
+
+                        # 거래소 TP/SL 실제 업데이트
+                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "false").lower() == "true":
+                            try:
+                                update_result = await asyncio.to_thread(
+                                    _auto_trader.update_position_tpsl,
+                                    new_tp, new_sl,
+                                    float(os.environ.get("AUTO_TRADE_BREAKEVEN_PCT", "1.0")),
+                                )
+                                if update_result.get("updated"):
+                                    _tg(
+                                        f"🔧 TP/SL 거래소 반영\n"
+                                        f"{update_result.get('side','').upper()} 진입가 ${update_result.get('entry',0):,.2f}\n"
+                                        f"새 TP: ${update_result.get('applied_tp') or 0:,.2f} | "
+                                        f"새 SL: ${update_result.get('applied_sl') or 0:,.2f}"
+                                    )
+                                else:
+                                    import logging as _tpsl_log
+                                    _tpsl_log.getLogger("tpsl").info(
+                                        "[TP/SL] 미갱신: %s", update_result.get("reason", "")
+                                    )
+                            except Exception as _exc:
+                                import logging as _tpsl_log
+                                _tpsl_log.getLogger("tpsl").warning("[update_tpsl] 실패: %s", _exc)
+                except Exception:
+                    pass
+
+            # ── 포지션 있으면 신규 진입 스킵 ──────
+            if _has_position:
+                return
 
             # ── 미체결 주문 취소 (이전 지정가 주문 정리) ──────
             if _auto_trader:
@@ -1751,48 +1803,6 @@ class AnalysisManager:
                 telegram_alert.alert_analysis, analysis, price or 0,
                 AUTO_TRADE_MIN_CONF
             )
-
-            # ── 포지션 있을 때 관리 알림 + 거래소 TP/SL 동적 업데이트
-            if _auto_trader:
-                try:
-                    positions = await asyncio.to_thread(_auto_trader.get_positions)
-                    if positions:
-                        trade_levels = analysis.get("trade_levels") or {}
-                        new_sl = trade_levels.get("stop")
-                        new_tp = trade_levels.get("target")
-                        for p in positions:
-                            side = p.get("holdSide", "")
-                            # Bitget 가 string 으로 반환하는 경우 있음 — float 강제 변환
-                            entry = float(p.get("averageOpenPrice", 0) or 0)
-                            upnl  = float(p.get("unrealizedPL", 0) or 0)
-                            emoji = "🟢" if upnl >= 0 else "🔴"
-                            msg = f"📊 포지션 관리 알림\n{side.upper()} 진입가 ${entry:,.2f}\n미실현: {emoji}${upnl:+,.2f}\n"
-                            if new_sl:
-                                msg += f"AI 권고 손절: ${new_sl:,.2f}\n"
-                            if new_tp:
-                                msg += f"AI 권고 익절: ${new_tp:,.2f}"
-                            _tg(msg)
-
-                        # 거래소 TP/SL 실제 업데이트 — 본전 이동 + AI 권고 반영.
-                        # 환경변수 AUTO_TRADE_DYNAMIC_TPSL=true 여야 동작 (기본 false).
-                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "false").lower() == "true":
-                            try:
-                                update_result = await asyncio.to_thread(
-                                    _auto_trader.update_position_tpsl,
-                                    new_tp, new_sl,
-                                    float(os.environ.get("AUTO_TRADE_BREAKEVEN_PCT", "1.0")),
-                                )
-                                if update_result.get("updated"):
-                                    _tg(
-                                        f"🔧 TP/SL 거래소 반영\n"
-                                        f"{update_result.get('side','').upper()} 진입가 ${update_result.get('entry',0):,.2f}\n"
-                                        f"새 TP: ${update_result.get('applied_tp') or 0:,.2f} | "
-                                        f"새 SL: ${update_result.get('applied_sl') or 0:,.2f}"
-                                    )
-                            except Exception as _exc:
-                                print(f"[update_tpsl] 실패: {_exc}", flush=True)
-                except Exception:
-                    pass
 
         except asyncio.CancelledError:
             await self._fail(job_id, "분석 작업이 취소되었습니다.", status="cancelled")
