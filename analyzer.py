@@ -545,6 +545,7 @@ def _build_context_blob(
             "market": market_ctx,
             "account": account_ctx,
             "chosen_fib": _chosen_fib,
+            "tpsl_levels": _base_r,   # 코드 계산 SL/TP — AI 출력 덮어쓰기용
         }
     return context_blob
 
@@ -923,27 +924,72 @@ def analyze_with_claude(
     )
     signal, confidence = parse_signal(raw_text)
     trade_levels = parse_trade_levels(raw_text)
-    # fib_ext / atr_mult: Reflection → FibStats 학습용 메타
+
+    # ── 코드 계산 SL/TP로 AI 출력값 강제 덮어쓰기 ──────────────────────
+    # AI는 방향(매수/매도)과 진입가만 결정
+    # SL = 1h 스윙 저점/고점 (구조적 근거), TP = 피보나치 연장선 (코드 계산)
     try:
         _sig_tmp, _ = parse_signal(raw_text)
+        _tpsl_r = raw_ctx.get("tpsl_levels")   # _build_context_blob에서 넘어온 코드 계산값
 
-        # 버그3 수정: 홀드 신호면 fib_direction 기록 자체를 스킵
-        if _sig_tmp in ("매수", "매도"):
+        if _sig_tmp in ("매수", "매도") and _tpsl_r and _tpsl_r.get("sw"):
             _fib_dir_tmp = "long" if _sig_tmp == "매수" else "short"
 
+            # SL: 스윙 저점/고점 (코드 계산) 강제 적용
+            if _fib_dir_tmp == "long":
+                _code_sl = _tpsl_r.get("sl_long")
+                _code_tp = _tpsl_r.get("tp_long")
+            else:
+                _code_sl = _tpsl_r.get("sl_short")
+                _code_tp = _tpsl_r.get("tp_short")
+
+            # 진입가 파싱 — AI가 설정한 진입가 기준으로 SL/TP 방향 검증
+            _entry_price = trade_levels.get("entry") or _tpsl_r.get("cur")
+
+            if _code_sl is not None and _entry_price:
+                # 진입가가 스윙 저점보다 낮은 경우 (박스 하단/지지선 터치 진입)
+                # → SL이 진입가보다 위에 있어 무효
+                # → ATR×1.0 사용 (0.5는 노이즈에 손절되므로 최소 1.0 필요)
+                _atr_v = _tpsl_r.get("atr", 0)
+                if _fib_dir_tmp == "long" and _code_sl >= _entry_price:
+                    _code_sl = round(_entry_price - _atr_v * 1.0, 1)
+                    _memory_logger.info("[TPSL override] 진입가<스윙저점(지지선 진입) → ATR×1.0 SL=$%.1f", _code_sl)
+                elif _fib_dir_tmp == "short" and _code_sl <= _entry_price:
+                    _code_sl = round(_entry_price + _atr_v * 1.0, 1)
+                    _memory_logger.info("[TPSL override] 진입가>스윙고점(저항선 진입) → ATR×1.0 SL=$%.1f", _code_sl)
+
+            if _code_sl is not None:
+                _ai_sl = trade_levels.get("stop")
+                trade_levels["stop"] = _code_sl
+                _memory_logger.info(
+                    "[TPSL override] SL: AI=$%s → 코드=$%s (스윙 저점 기준)",
+                    _ai_sl, _code_sl
+                )
+            if _code_tp is not None:
+                _ai_tp = trade_levels.get("target")
+                trade_levels["target"] = _code_tp
+                _memory_logger.info(
+                    "[TPSL override] TP: AI=$%s → 코드=$%s (피보나치 연장선)",
+                    _ai_tp, _code_tp
+                )
+
+            # FibStats 학습 메타 저장
             from agents.fib_stats import get_fib_stats as _gfs2
-            _fs2 = _gfs2()
-
-            # 버그1 수정: preferred_extensions[0] 대신 실제 pick된 ext 사용
-            # raw_ctx["chosen_fib"]에 실제 선택값이 담겨 있음
             _chosen = raw_ctx.get("chosen_fib", {})
-            _actual_ext = _chosen.get(_fib_dir_tmp)  # 실제 pick된 연장선
-
-            trade_levels["fib_ext"]       = _actual_ext   # 실제 사용값
+            _actual_ext = _chosen.get(_fib_dir_tmp)
+            trade_levels["fib_ext"]       = _actual_ext
             trade_levels["fib_direction"] = _fib_dir_tmp
-            # atr_mult 제거: SL은 피보나치 스윙 기준으로 변경, ATR 배수 학습 불필요
-    except Exception:
-        pass
+
+        elif _sig_tmp in ("매수", "매도"):
+            # 스윙 계산 실패 시 — AI 출력값 그대로 사용하되 로그 남김
+            _memory_logger.warning(
+                "[TPSL override] 스윙 계산 실패 → AI 출력 SL/TP 그대로 사용 (신뢰도 낮음)"
+            )
+            _fib_dir_tmp = "long" if _sig_tmp == "매수" else "short"
+            trade_levels["fib_direction"] = _fib_dir_tmp
+
+    except Exception as _ov_exc:
+        _memory_logger.warning("[TPSL override] 실패: %s → AI 출력값 사용", _ov_exc)
     report_meta = parse_report_sections(raw_text)
     claude_leverage = parse_leverage(raw_text)
 
