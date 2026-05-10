@@ -110,7 +110,9 @@ USER_PROMPT_TEMPLATE = """분석 기준 시각: {now_kst} (KST)
 1. 구체 수치(가격·RSI·펀딩비·OI·ATR 등)는 입력 데이터에 있는 값만 인용. 환각 절대 금지.
 2. 매매 파라미터(진입가/손절가/목표가)는 단일 숫자 하나만. 범위·N/A·조건부 표기 금지.
 3. 목표가는 R:R 1.5 이상을 만족하도록 설정 (|목표가-진입가| ≥ 1.5 × |진입가-손절가|).
-4. SL 거리는 1h ATR × 0.5~2.0 사이 (데이터의 [ATR] 섹션 참조).
+4. 손절가/목표가는 [ATR & 구조적 매매 레벨] 섹션의 SL/TP 후보를 우선 사용하세요.
+   구조적 레벨이 R:R 1.5 미달 시 ATR × 1.5~2.0으로 TP를 확장하세요.
+   SL은 ATR × 1.0 미만 절대 금지.
 
 이제 아래 형식으로 응답하세요. 제목과 순서를 바꾸지 마세요:
 
@@ -127,8 +129,8 @@ USER_PROMPT_TEMPLATE = """분석 기준 시각: {now_kst} (KST)
     - 즉시 진입 의도: 현재가 그대로
     - 되돌림 대기: 매수면 현재가보다 낮게, 매도면 현재가보다 높게
     - 돌파 후 진입: 트리거 +0.1%(매수) / -0.1%(매도)
-• 손절가: $[숫자]   ← 1h ATR × 0.5~2.0 거리. 데이터의 [ATR] 섹션 참조.
-• 목표가: $[숫자]   ← R:R 1.5 이상 필수.
+• 손절가: $[숫자]   ← [ATR & 구조적 매매 레벨]의 SL 후보 우선 사용. ATR × 1.0 미만 금지.
+• 목표가: $[숫자]   ← [ATR & 구조적 매매 레벨]의 TP 후보 우선 사용. R:R 1.5 이상 필수.
 • 권장 레버리지: [숫자]배 (1~10)
 
 📌 먼저 보이는 사실
@@ -303,18 +305,74 @@ def _build_context_blob(
     except Exception as _bg_exc:
         account_context_str += f"\n[비트겟 데이터]\n  수집 실패 — {_bg_exc}"
 
-    # ATR — indicators.add_atr 로 이미 계산된 컬럼을 사용 (재계산 제거)
+    # ATR + 구조적 SL/TP 후보 계산
+    # 코드에서 스윙 고저점을 직접 계산해 AI에게 전달 — AI가 직접 계산하면 부정확
     try:
-        if "1h" in multi_tf_data:
-            df_1h = multi_tf_data["1h"]
-            atr_col = df_1h["atr"] if "atr" in df_1h.columns else None
+        if "4h" in multi_tf_data:
+            df_4h = multi_tf_data["4h"]
+            atr_col = df_4h["atr"] if "atr" in df_4h.columns else None
             if atr_col is not None and len(atr_col) > 0:
                 atr_val = float(atr_col.iloc[-1])
+                cur_price = float(df_4h.iloc[-1]["close"])
                 if atr_val > 0:
-                    account_context_str += (
-                        f"\n[ATR]\n  1h ATR: ${atr_val:,.2f} | "
-                        f"SL권고: ${atr_val*0.5:,.2f} | TP권고: ${atr_val*1.0:,.2f}"
-                    )
+                    # 구조적 SL/TP 후보: 직전 4h 스윙 고저점
+                    try:
+                        _sw = fibonacci_swing_levels(df_4h, window=fib_window_for_tf("4h"))
+                        if _sw:
+                            _sw_low  = _sw["swing_low"]
+                            _sw_high = _sw["swing_high"]
+                            # 롱 SL 후보: 스윙 저점 -0.1% / ATR 기준 중 더 넓은 쪽
+                            _sl_long_swing  = round(_sw_low  * 0.999, 1)
+                            _sl_short_swing = round(_sw_high * 1.001, 1)
+                            # ATR 기반 최소 SL 거리
+                            _sl_long_atr   = round(cur_price - atr_val * 1.0, 1)
+                            _sl_short_atr  = round(cur_price + atr_val * 1.0, 1)
+                            # 구조적 레벨이 ATR 기준보다 타이트하면 ATR 사용
+                            _sl_long_final  = min(_sl_long_swing,  _sl_long_atr)
+                            _sl_short_final = max(_sl_short_swing, _sl_short_atr)
+                            # TP 후보: 스윙 고점(롱) / 스윙 저점(숏)
+                            _tp_long_swing  = round(_sw_high * 0.999, 1)
+                            _tp_short_swing = round(_sw_low  * 1.001, 1)
+                            # RR 검증 (1.5 이상)
+                            _long_sl_dist  = cur_price - _sl_long_final
+                            _long_tp_dist  = _tp_long_swing - cur_price
+                            _short_sl_dist = _sl_short_final - cur_price
+                            _short_tp_dist = cur_price - _tp_short_swing
+                            _long_rr  = round(_long_tp_dist  / _long_sl_dist,  2) if _long_sl_dist  > 0 else 0
+                            _short_rr = round(_short_tp_dist / _short_sl_dist, 2) if _short_sl_dist > 0 else 0
+
+                            account_context_str += (
+                                f"\n[ATR & 구조적 매매 레벨]"
+                                f"\n  4h ATR: ${atr_val:,.2f}"
+                                f"\n  4h 스윙 저점: ${_sw_low:,.1f} ({_sw['swing_low_ago']}봉 전)"
+                                f"  4h 스윙 고점: ${_sw_high:,.1f} ({_sw['swing_high_ago']}봉 전)"
+                                f"\n  ─ 롱 기준 ─"
+                                f"\n    SL 후보: ${_sl_long_final:,.1f}"
+                                f" (스윙저점 ${_sl_long_swing:,.1f} vs ATR1.0배 ${_sl_long_atr:,.1f} → 더 넓은 값)"
+                                f"\n    TP 후보: ${_tp_long_swing:,.1f} (스윙고점 기준)"
+                                f"  R:R {_long_rr:.2f}"
+                                f"\n  ─ 숏 기준 ─"
+                                f"\n    SL 후보: ${_sl_short_final:,.1f}"
+                                f" (스윙고점 ${_sl_short_swing:,.1f} vs ATR1.0배 ${_sl_short_atr:,.1f} → 더 넓은 값)"
+                                f"\n    TP 후보: ${_tp_short_swing:,.1f} (스윙저점 기준)"
+                                f"  R:R {_short_rr:.2f}"
+                                f"\n  ※ R:R 1.5 미달 시 ATR × 1.5~2.0 으로 TP 확장하세요."
+                            )
+                        else:
+                            # 스윙 계산 실패 시 ATR만 제공
+                            account_context_str += (
+                                f"\n[ATR]\n  4h ATR: ${atr_val:,.2f} | "
+                                f"SL권고(1.0배): ${atr_val*1.0:,.2f} | "
+                                f"SL권고(1.5배): ${atr_val*1.5:,.2f} | "
+                                f"SL권고(2.0배): ${atr_val*2.0:,.2f}"
+                            )
+                    except Exception:
+                        account_context_str += (
+                            f"\n[ATR]\n  4h ATR: ${atr_val:,.2f} | "
+                            f"SL권고(1.0배): ${atr_val*1.0:,.2f} | "
+                            f"SL권고(1.5배): ${atr_val*1.5:,.2f} | "
+                            f"SL권고(2.0배): ${atr_val*2.0:,.2f}"
+                        )
     except Exception:
         pass
 
