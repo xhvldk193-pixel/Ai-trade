@@ -231,7 +231,7 @@ class BitgetClient:
 
     def set_sl(self, symbol: str, trigger_price: float,
                hold_side: str, size: float) -> dict:
-        """손절(SL) 주문 등록. One-way 모드 기준 — holdSide 미전송."""
+        """손절(SL) 주문 등록. One-way 모드 — holdSide 미전송."""
         try:
             return self._rest_post("/api/v2/mix/order/place-tpsl-order", {
                 "symbol":       symbol if symbol.endswith("USDT") else f"{symbol}USDT",
