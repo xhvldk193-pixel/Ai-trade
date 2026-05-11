@@ -262,17 +262,17 @@ class BitgetClient:
         }
         trade_side, trade_type = action_map.get(side, ("buy", "open"))
         body = {
-            "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
-            "productType": "USDT-FUTURES",
-            "marginMode":  "isolated",
-            "marginCoin":  "USDT",
-            "planType":    "normal_plan",
-            "size":        str(size),
-            "side":        trade_side,
-            "tradeSide":   trade_type,
+            "symbol":       symbol if symbol.endswith("USDT") else f"{symbol}USDT",
+            "productType":  "USDT-FUTURES",
+            "marginMode":   "isolated",
+            "marginCoin":   "USDT",
+            "planType":     "normal_plan",
+            "size":         str(size),
+            "side":         trade_side,
+            "tradeSide":    trade_type,
             "triggerPrice": str(trigger_price),
-            "triggerType": "mark_price",
-            "orderType":   "limit" if order_price else "market",
+            "triggerType":  "mark_price",
+            "orderType":    "limit" if order_price else "market",
         }
         if order_price:
             body["price"] = str(order_price)
@@ -295,16 +295,33 @@ class BitgetClient:
         except Exception as e:
             log.warning("[Bitget] TP/SL 취소 실패(무시): %s", e)
         # 진입 트리거 주문(normal_plan) 전체 취소 — 중복 등록 방지
+        # Bitget v2: 개별 orderId가 필요하므로 pending 조회 후 일괄 취소
         try:
-            results["trigger"] = self._rest_post(
-                "/api/v2/mix/order/cancel-all-plan-orders",
+            _sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+            _pending = self._rest_post(
+                "/api/v2/mix/order/orders-plan-pending",
                 {
-                    "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
+                    "symbol":      _sym,
                     "productType": "USDT-FUTURES",
-                    "marginCoin":  "USDT",
                     "planType":    "normal_plan",
                 }
             )
+            _orders = (_pending or {}).get("data", {}).get("entrustedList", [])
+            for _o in _orders:
+                _oid = _o.get("orderId")
+                if _oid:
+                    try:
+                        self._rest_post(
+                            "/api/v2/mix/order/cancel-plan-order",
+                            {
+                                "symbol":      _sym,
+                                "productType": "USDT-FUTURES",
+                                "orderId":     _oid,
+                            }
+                        )
+                    except Exception:
+                        pass
+            results["trigger"] = f"취소 완료 {len(_orders)}건"
         except Exception as e:
             log.warning("[Bitget] 진입 트리거 취소 실패(무시): %s", e)
         return results
@@ -531,6 +548,14 @@ class BitgetAutoTrader:
         use_limit   = False
         use_trigger = False   # 미돌파 → 거래소에 트리거 주문 등록
 
+        # entry_price 없으면 현재가 기준으로 즉시 진입하지 않고
+        # 분석 텍스트에서 "돌파" "눌림" 키워드 확인 후 트리거 등록
+        if not entry_price and trade_levels:
+            _raw_entry = str(trade_levels.get("bull_trigger") or "")
+            if _raw_entry and float(_raw_entry) > 0:
+                entry_price = float(_raw_entry)
+                log.info("[AutoTrader] entry 미파싱 → bull_trigger $%.2f 사용", entry_price)
+
         if entry_price and price:
             if desired == "long":
                 if price >= entry_price:
@@ -563,13 +588,12 @@ class BitgetAutoTrader:
                              price, entry_price)
 
         if use_trigger and entry_price:
-            # 트리거가 울리면 entry_price 지정가로 체결 (슬리피지 방지)
-            # 롱: 트리거=entry_price, 체결가=entry_price (limit)
-            # 숏: 동일
+            # 트리거 가격 도달 시 시장가 즉시 체결
+            # 지정가로 하면 돌파 순간 가격이 올라가 미체결 가능성 있음
             order_resp = self.client.place_plan_order(
                 self.symbol, order_side, size,
                 trigger_price=entry_price,
-                order_price=entry_price,   # 지정가 체결
+                order_price=None,   # 시장가 체결
                 tp=tp, sl=sl,
             )
             result["action"] = desired
