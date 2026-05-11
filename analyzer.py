@@ -66,7 +66,12 @@ SYSTEM_PROMPT = (
     "4. 5m는 진입 타이밍 힌트일 뿐, 큰 방향의 핵심 근거로 과대평가하지 마세요.\n"
     "5. 계좌/포지션 정보와 최근 운영 맥락은 시장 방향의 근거가 아니라 실행 제약입니다.\n"
     "   오픈 포지션이 있을 경우 신규 진입 대신 현재 포지션 관리를 우선적으로 분석하세요.\n"
-    "   ★ 포지션 보유 중에는 [매매 파라미터]를 신규 진입 기준이 아닌 현재 포지션 관리 레벨로 작성하세요.\n"
+    "   ★ 포지션 보유 중에는 [매매 파라미터]를 현재 포지션 관리 레벨로 작성하세요.\n"
+    "   ★ 포지션 보유 중 [매매 파라미터] 형식 절대 엄수:\n"
+    "      • 진입가: $[현재 보유 포지션 진입가 그대로]\n"
+    "      • 손절가: $[권고 SL 숫자 하나 — 서술·조건문 금지. 자동매매가 이 값을 거래소에 즉시 반영]\n"
+    "      • 목표가: $[권고 TP 숫자 하나 — 서술·조건문 금지. 자동매매가 이 값을 거래소에 즉시 반영]\n"
+    "      ※ 공격적/보수적 서술은 [대응] 섹션에만. [매매 파라미터]는 반드시 숫자 하나만.\n"
     "   ★ [대응] 섹션에 추가 진입 조언은 절대 작성하지 마세요. 포지션 관리(SL이동/TP조정/청산조건)만 작성하세요.\n"
     "6. 최근 계좌 운영 맥락이 보이면 수익 보호 모드인지, 손실 복구 시도인지 읽되 관측된 사실에 기대어 표현하세요.\n"
     "7. 박스권(레인지) 레짐 특별 규칙:\n"
@@ -848,6 +853,7 @@ def analyze_with_claude(
     macro_snapshot: Optional[dict] = None,
     debate: Optional[DebateResult] = None,
     pipeline: Optional[PipelineResult] = None,
+    raw_ctx: Optional[dict] = None,   # _build_context_blob 결과 — TPSL override용
 ) -> dict:
     """
     최종 애널리스트 Claude 호출.
@@ -928,6 +934,23 @@ def analyze_with_claude(
     signal, confidence = parse_signal(raw_text)
     trade_levels = parse_trade_levels(raw_text)
 
+    report_meta = parse_report_sections(raw_text)
+    claude_leverage = parse_leverage(raw_text)
+
+    # Judge 결과 추출 (signal processing 에 활용)
+    judge_result = (
+        pipeline.judge if pipeline is not None else None
+    )
+
+    # Trading Signal 구조화 (extract_trading_signal 이 가용할 때만)
+    trading_signal_dict = None
+    if extract_trading_signal is not None:
+        try:
+            ts = extract_trading_signal(raw_text, judge_result=judge_result)
+            trading_signal_dict = ts.to_dict()
+        except Exception as _ts_exc:
+            _memory_logger.warning("extract_trading_signal 실패 — %s", _ts_exc)
+
     # ── 코드 계산 SL/TP로 AI 출력값 강제 덮어쓰기 ──────────────────────
     # AI는 방향(매수/매도)과 진입가만 결정
     # SL = 1h 스윙 저점/고점 (구조적 근거), TP = 피보나치 연장선 (코드 계산)
@@ -993,22 +1016,7 @@ def analyze_with_claude(
 
     except Exception as _ov_exc:
         _memory_logger.warning("[TPSL override] 실패: %s → AI 출력값 사용", _ov_exc)
-    report_meta = parse_report_sections(raw_text)
-    claude_leverage = parse_leverage(raw_text)
 
-    # Judge 결과 추출 (signal processing 에 활용)
-    judge_result = (
-        pipeline.judge if pipeline is not None else None
-    )
-
-    # Trading Signal 구조화 (extract_trading_signal 이 가용할 때만)
-    trading_signal_dict = None
-    if extract_trading_signal is not None:
-        try:
-            ts = extract_trading_signal(raw_text, judge_result=judge_result)
-            trading_signal_dict = ts.to_dict()
-        except Exception as _ts_exc:
-            _memory_logger.warning("extract_trading_signal 실패 — %s", _ts_exc)
 
     return {
         "signal":       signal,
@@ -1137,6 +1145,7 @@ def run_full_analysis(
         multi_tf_data,
         macro_snapshot=macro_snapshot,
         pipeline=pipeline,
+        raw_ctx=raw_ctx,   # TPSL override용
     )
 
     # 5) 메모리에 이번 상황-조언 페어 기록 (reflection 을 위한 씨앗)
