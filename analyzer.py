@@ -303,6 +303,10 @@ def _build_context_blob(
                     _risk_pct = abs(_total_upnl) / _equity * 100
                     bitget_ctx += f"\n  ⚠️ 현재 미실현 리스크: 잔고의 {_risk_pct:.1f}%"
                 bitget_ctx += "\n  🚫 포지션 보유 중 — 신규 진입 금지. 기존 포지션 관리(SL/TP 조정·청산)만 분석하세요."
+                # 포지션 진입가를 tpsl 계산의 기준가로 저장
+                if _positions:
+                    _pos_entry_price = float(_positions[0].get("averageOpenPrice", 0) or 0)
+                    _pos_side = _positions[0].get("holdSide", "").lower()  # "long" or "short"
             else:
                 bitget_ctx += "\n  현재 포지션: 없음 (신규 진입 가능)"
 
@@ -316,6 +320,8 @@ def _build_context_blob(
     # TP = 피보나치 연장선 (FibStats 도달률 우선순위)
     # ATR = 저변동성 진입 필터용으로만 활용
     _chosen_fib = {"long": None, "short": None}   # try 밖에서 미리 초기화 — 예외 시에도 안전
+    _pos_entry_price = None   # 포지션 보유 중 진입가 (tpsl 기준가용)
+    _pos_side = None
     _r1h   = None   # try 밖 초기화 — 예외 시 None으로 안전 폴백
     _r4h   = None
     _base_r = None
@@ -347,6 +353,7 @@ def _build_context_blob(
                 return None
             atr_v = float(atr_col.iloc[-1])
             cur   = float(df.iloc[-1]["close"])
+            base  = cur   # 현재가 기준
             if atr_v <= 0:
                 return None
 
@@ -554,6 +561,7 @@ def _build_context_blob(
             "account": account_ctx,
             "chosen_fib": _chosen_fib,
             "tpsl_levels": _base_r,   # 코드 계산 SL/TP — AI 출력 덮어쓰기용
+            "pos_side": _pos_side if "_pos_side" in dir() else "long",  # 포지션 방향
         }
     return context_blob
 
@@ -954,9 +962,29 @@ def analyze_with_claude(
     # ── 코드 계산 SL/TP로 AI 출력값 강제 덮어쓰기 ──────────────────────
     # AI는 방향(매수/매도)과 진입가만 결정
     # SL = 1h 스윙 저점/고점 (구조적 근거), TP = 피보나치 연장선 (코드 계산)
+    # 포지션 보유 중(홀드) → SL만 코드 강제, TP는 AI 원본 사용
     try:
         _sig_tmp, _ = parse_signal(raw_text)
-        _tpsl_r = raw_ctx.get("tpsl_levels")   # _build_context_blob에서 넘어온 코드 계산값
+        _tpsl_r = raw_ctx.get("tpsl_levels") if raw_ctx else None
+        _has_pos = raw_ctx.get("tpsl_levels") is not None and bool(raw_ctx.get("tpsl_levels"))
+
+        # 포지션 보유 중 홀드 신호일 때 → 방향은 trade_levels의 기존값으로 유추
+        if _sig_tmp == "홀드" and _has_pos:
+            _existing_stop = trade_levels.get("stop")
+            if _existing_stop:
+                # AI가 SL을 제시했으면 코드 계산 SL로 덮어쓰기
+                _tpsl_r2 = _tpsl_r if _tpsl_r and _tpsl_r.get("sw") else None
+                if _tpsl_r2:
+                    # 현재 포지션 방향 파악 (raw_ctx에 포지션 정보 있으면 사용)
+                    _pos_side_ctx = raw_ctx.get("pos_side", "long")
+                    _code_sl_h = _tpsl_r2.get("sl_long") if _pos_side_ctx == "long" else _tpsl_r2.get("sl_short")
+                    if _code_sl_h is not None:
+                        _ai_sl_h = trade_levels.get("stop")
+                        trade_levels["stop"] = _code_sl_h
+                        _memory_logger.info(
+                            "[TPSL override/홀드] SL: AI=$%s → 코드=$%s (스윙 저점 기준)",
+                            _ai_sl_h, _code_sl_h
+                        )
 
         if _sig_tmp in ("매수", "매도") and _tpsl_r and _tpsl_r.get("sw"):
             _fib_dir_tmp = "long" if _sig_tmp == "매수" else "short"
