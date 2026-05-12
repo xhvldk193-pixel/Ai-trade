@@ -44,7 +44,10 @@ class BitgetClient:
                 data = (resp or {}).get("data") or {}
                 equity    = float(data.get("equity",    0) or 0)
                 available = float(data.get("available", 0) or 0)
-                if equity > 0:
+                # equity가 0이면 available로 폴백 (Isolated 모드에서 증거금 잠김 시)
+                balance = equity if equity > 0 else available
+                if balance > 0:
+                    equity = balance  # 이하 로직에서 equity 사용
                     # 오늘 PnL 조회
                     today_pnl = 0.0
                     try:
