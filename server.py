@@ -1739,32 +1739,42 @@ class AnalysisManager:
             # 포지션 체크를 신규 진입 전으로 분리 — 이전 구조에서는 포지션 있으면
             # return으로 종료해 TP/SL 업데이트가 절대 실행되지 않던 버그 수정.
             if _auto_trader and _has_position:
+                import logging as _pos_log
+                _pos_logger = _pos_log.getLogger("position-mgmt")
                 try:
                     positions = await asyncio.to_thread(_auto_trader.get_positions)
+                    _pos_logger.info("[PosMgmt] 포지션 %d개 확인", len(positions) if positions else 0)
                     if positions:
                         trade_levels = analysis.get("trade_levels") or {}
                         new_sl = trade_levels.get("stop")
                         new_tp = trade_levels.get("target")
+                        _pos_logger.info("[PosMgmt] AI 권고 SL=%s TP=%s", new_sl, new_tp)
                         for p in positions:
                             side  = p.get("holdSide", "")
                             entry = float(p.get("averageOpenPrice", 0) or 0)
                             upnl  = float(p.get("unrealizedPL", 0) or 0)
                             emoji = "🟢" if upnl >= 0 else "🔴"
+                            # 알림 전 방향 검증
+                            from bitget_trader import _validate_tpsl as _vts
+                            _dir = "long" if "long" in side.lower() else "short"
+                            _vsl, _vtp = _vts(_dir, entry, new_tp, new_sl, entry=entry)
                             msg = f"📊 포지션 관리 알림\n{side.upper()} 진입가 ${entry:,.2f}\n미실현: {emoji}${upnl:+,.2f}\n"
-                            if new_sl:
-                                msg += f"AI 권고 손절: ${new_sl:,.2f}\n"
-                            if new_tp:
-                                msg += f"AI 권고 익절: ${new_tp:,.2f}"
+                            if _vsl:
+                                msg += f"AI 권고 손절: ${_vsl:,.2f}\n"
+                            if _vtp:
+                                msg += f"AI 권고 익절: ${_vtp:,.2f}"
                             _tg(msg)
 
                         # 거래소 TP/SL 실제 업데이트
-                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "true").lower() == "true":   # 기본 활성화
+                        if os.environ.get("AUTO_TRADE_DYNAMIC_TPSL", "true").lower() == "true":
                             try:
+                                _pos_logger.info("[PosMgmt] update_position_tpsl 호출 — tp=%s sl=%s", new_tp, new_sl)
                                 update_result = await asyncio.to_thread(
                                     _auto_trader.update_position_tpsl,
                                     new_tp, new_sl,
                                     float(os.environ.get("AUTO_TRADE_BREAKEVEN_PCT", "1.0")),
                                 )
+                                _pos_logger.info("[PosMgmt] 결과: %s", update_result)
                                 if update_result.get("updated"):
                                     _tg(
                                         f"🔧 TP/SL 거래소 반영\n"
@@ -1773,15 +1783,11 @@ class AnalysisManager:
                                         f"새 SL: ${update_result.get('applied_sl') or 0:,.2f}"
                                     )
                                 else:
-                                    import logging as _tpsl_log
-                                    _tpsl_log.getLogger("tpsl").info(
-                                        "[TP/SL] 미갱신: %s", update_result.get("reason", "")
-                                    )
+                                    _pos_logger.info("[PosMgmt] 미갱신: %s", update_result.get("reason", ""))
                             except Exception as _exc:
-                                import logging as _tpsl_log
-                                _tpsl_log.getLogger("tpsl").warning("[update_tpsl] 실패: %s", _exc)
-                except Exception:
-                    pass
+                                _pos_logger.warning("[PosMgmt] update_tpsl 실패: %s", _exc)
+                except Exception as _pos_exc:
+                    _pos_logger.warning("[PosMgmt] 전체 실패: %s", _pos_exc)
 
             # ── 포지션 있으면 신규 진입 스킵 ──────
             if _has_position:
