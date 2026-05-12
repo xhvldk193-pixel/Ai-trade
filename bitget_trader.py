@@ -218,7 +218,9 @@ class BitgetClient:
         d = r.json()
         if d.get("code") not in ("00000", "0"):
             err = f"Bitget: {d.get('msg')} ({d.get('code')})"
-            self._tg_alert(f"⚠️ Bitget API 오류\n{err}")
+            # 40009 서명 오류 시 어떤 엔드포인트인지 로그에 남김
+            log.warning("[REST] %s 오류: %s", path, err)
+            self._tg_alert(f"⚠️ Bitget API 오류\n{err}\n경로: {path}")
             raise RuntimeError(err)
         return d
 

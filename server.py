@@ -664,7 +664,11 @@ def _market_overview(tf_data: dict, price: float, last_update: str | None) -> di
 
 
 def _build_account_payload() -> dict:
-    ctx = fetch_account_context()
+    try:
+        ctx = fetch_account_context()
+    except Exception as _e:
+        # Binance API 미설정 또는 오류 시 빈 컨텍스트 반환 (Bitget 전용 모드)
+        ctx = {}
     return {
         "updated_at": _now_label(),
         **ctx,
@@ -1291,6 +1295,10 @@ class AccountStreamManager:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    if "BINANCE" in str(exc).upper() or "fapi" in str(exc).lower():
+                        # Binance API 미설정 시 조용히 재시도 (텔레그램 알림 없음)
+                        await asyncio.sleep(30)
+                        continue
                     print(f"[account-stream] bootstrap failed: {exc} — {bootstrap_backoff}초 후 재시도")
                     await asyncio.sleep(min(bootstrap_backoff, 60))
                     bootstrap_backoff = min(bootstrap_backoff * 2, 60)
