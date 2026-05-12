@@ -87,6 +87,17 @@ SYSTEM_PROMPT = (
     "   - 박스 중간 50% 구간: 진입 금지\n"
     "   - 박스 돌파 후 거래량이 평균의 1.5배 미달이면 추세 추종 금지\n"
     "   - 박스권 SL/TP: 피보나치 X, 직전 고점/저점 기준 O\n"
+    "8. RSI 과매수/과매도 구간 진입 금지 규칙 (추격 진입 방지):\n"
+    "   ★ RSI < 40 (과매도 구간): 즉시 숏 진입 절대 금지.\n"
+    "     → 이미 많이 내려온 자리. 반등 후 되돌림을 기다리세요.\n"
+    "     → 관점은 '하방 우위'로 유지하되, 진입가는 현재가보다 높게(되돌림 저항 예상가) 설정.\n"
+    "     → 되돌림 목표: RSI 45~55 구간 회복 후 다시 꺾이는 자리.\n"
+    "   ★ RSI > 60 (과매수 구간): 즉시 롱 진입 절대 금지.\n"
+    "     → 이미 많이 올라온 자리. 눌림 후 되돌림을 기다리세요.\n"
+    "     → 관점은 '상방 우위'로 유지하되, 진입가는 현재가보다 낮게(눌림 지지 예상가) 설정.\n"
+    "     → 눌림 목표: RSI 45~55 구간 되돌림 후 다시 올라오는 자리.\n"
+    "   ★ RSI 40~60 구간: 정상 진입 허용 — 방향과 구조에 따라 판단.\n"
+    "   ※ 이 규칙은 추격 진입으로 인한 고점매수/저점매도를 방지하기 위한 핵심 규칙입니다.\n"
     "\n"
     "확신도 산정 원칙 (이 시나리오대로 진행될 확률 = 승률 추정):\n"
     "  90~100: 모든 TF/지표/거시 정합 + 명백한 구조적 트리거 발동\n"
@@ -949,6 +960,44 @@ def analyze_with_claude(
     signal, confidence = parse_signal(raw_text)
     trade_levels = parse_trade_levels(raw_text)
 
+    # ── RSI 과매수/과매도 구간 추격 진입 하드 블록 ──────────────────────
+    # AI가 프롬프트 규칙을 무시하고 즉시 진입 신호를 낼 경우 코드로 강제 차단.
+    # RSI < 40: 숏 추격 진입 차단 → 되돌림 대기 (진입가를 현재가보다 높게 조정)
+    # RSI > 60: 롱 추격 진입 차단 → 눌림 대기 (진입가를 현재가보다 낮게 조정)
+    try:
+        if signal in ("매수", "매도") and multi_tf_data:
+            # 1h RSI 우선, 없으면 15m, 4h 순서로 사용
+            _rsi_tf = next((tf for tf in ("1h", "15m", "4h") if tf in multi_tf_data), None)
+            if _rsi_tf is not None:
+                _rsi_val = float(multi_tf_data[_rsi_tf].iloc[-1]["rsi"])
+                _cur_price = float(multi_tf_data[_rsi_tf].iloc[-1]["close"])
+                _atr_val = float(multi_tf_data[_rsi_tf].iloc[-1].get("atr", 0))
+
+                if signal == "매도" and _rsi_val < 40:
+                    # 과매도 구간 숏 추격 차단 → 되돌림 후 진입 대기
+                    # 진입가를 현재가 + ATR×0.5 (되돌림 저항 예상 구간)로 조정
+                    _rebound_entry = round(_cur_price + _atr_val * 0.5, 1)
+                    trade_levels["entry"] = _rebound_entry
+                    _memory_logger.warning(
+                        "[RSI 필터] 숏 추격 차단 — RSI=%.1f (<40, 과매도). "
+                        "진입가 $%s → 되돌림 대기 $%s (현재가+ATR×0.5)",
+                        _rsi_val, _cur_price, _rebound_entry,
+                    )
+
+                elif signal == "매수" and _rsi_val > 60:
+                    # 과매수 구간 롱 추격 차단 → 눌림 후 진입 대기
+                    # 진입가를 현재가 - ATR×0.5 (눌림 지지 예상 구간)로 조정
+                    _pullback_entry = round(_cur_price - _atr_val * 0.5, 1)
+                    trade_levels["entry"] = _pullback_entry
+                    _memory_logger.warning(
+                        "[RSI 필터] 롱 추격 차단 — RSI=%.1f (>60, 과매수). "
+                        "진입가 $%s → 눌림 대기 $%s (현재가-ATR×0.5)",
+                        _rsi_val, _cur_price, _pullback_entry,
+                    )
+
+    except Exception as _rsi_exc:
+        _memory_logger.warning("[RSI 필터] 처리 실패 (무시): %s", _rsi_exc)
+    # ────────────────────────────────────────────────────────────────────
 
     report_meta = parse_report_sections(raw_text)
     claude_leverage = parse_leverage(raw_text)
