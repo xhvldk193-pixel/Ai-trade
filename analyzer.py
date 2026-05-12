@@ -72,6 +72,9 @@ SYSTEM_PROMPT = (
     "      • 손절가: $[권고 SL 숫자 하나] ← 롱이면 반드시 진입가보다 낮게, 숏이면 반드시 진입가보다 높게. 위반 시 자동 무시됨.\n"
     "      • 목표가: $[권고 TP 숫자 하나] ← 롱이면 반드시 현재가보다 높게, 숏이면 반드시 현재가보다 낮게.\n"
     "      ※ 서술·조건문 금지. 숫자 하나만. 공격적/보수적 서술은 [대응] 섹션에만.\n"
+    "   ★ 포지션과 반대 방향 신호(롱 보유 중 매도, 숏 보유 중 매수)가 나올 경우:\n"
+    "      신호는 홀드로 변경하고, [대응] 섹션에 청산 조건만 서술하세요.\n"
+    "      반대 방향 SL/TP는 절대 작성하지 마세요 — 자동매매 오작동 유발.\n"
     "   ★ [대응] 섹션에 추가 진입 조언은 절대 작성하지 마세요. 포지션 관리(SL이동/TP조정/청산조건)만 작성하세요.\n"
     "6. 최근 계좌 운영 맥락이 보이면 수익 보호 모드인지, 손실 복구 시도인지 읽되 관측된 사실에 기대어 표현하세요.\n"
     "7. 박스권(레인지) 레짐 특별 규칙:\n"
@@ -966,7 +969,8 @@ def analyze_with_claude(
     try:
         _sig_tmp, _ = parse_signal(raw_text)
         _tpsl_r = raw_ctx.get("tpsl_levels") if raw_ctx else None
-        _has_pos = raw_ctx.get("tpsl_levels") is not None and bool(raw_ctx.get("tpsl_levels"))
+        # 포지션 보유 여부: context_blob에 "신규 진입 금지" 문자열이 있으면 포지션 있음
+        _has_pos = raw_ctx is not None and bool(raw_ctx.get("pos_side"))
 
         # 포지션 보유 중 홀드 신호일 때 → 방향은 trade_levels의 기존값으로 유추
         if _sig_tmp == "홀드" and _has_pos:
