@@ -72,6 +72,10 @@ SYSTEM_PROMPT = (
     "      • 손절가: $[권고 SL 숫자 하나] ← 롱이면 반드시 진입가보다 낮게, 숏이면 반드시 진입가보다 높게. 위반 시 자동 무시됨.\n"
     "      • 목표가: $[권고 TP 숫자 하나] ← 롱이면 반드시 현재가보다 높게, 숏이면 반드시 현재가보다 낮게.\n"
     "      ※ 서술·조건문 금지. 숫자 하나만. 공격적/보수적 서술은 [대응] 섹션에만.\n"
+    "      자동매매가 이 값을 거래소에 즉시 반영합니다.\n"
+    "   ★ 포지션과 반대 방향 신호(롱 보유 중 매도, 숏 보유 중 매수)가 나올 경우:\n"
+    "      신호는 홀드로 변경하고, [대응] 섹션에 청산 조건만 서술하세요.\n"
+    "      반대 방향 SL/TP는 절대 작성하지 마세요 — 자동매매 오작동 유발.\n"
     "   ★ 포지션과 반대 방향 신호(롱 보유 중 매도, 숏 보유 중 매수)가 나올 경우:\n"
     "      신호는 홀드로 변경하고, [대응] 섹션에 청산 조건만 서술하세요.\n"
     "      반대 방향 SL/TP는 절대 작성하지 마세요 — 자동매매 오작동 유발.\n"
@@ -945,6 +949,58 @@ def analyze_with_claude(
     signal, confidence = parse_signal(raw_text)
     trade_levels = parse_trade_levels(raw_text)
 
+
+    report_meta = parse_report_sections(raw_text)
+    claude_leverage = parse_leverage(raw_text)
+
+    # Judge 결과 추출 (signal processing 에 활용)
+    judge_result = (
+        pipeline.judge if pipeline is not None else None
+    )
+
+    # Trading Signal 구조화 (extract_trading_signal 이 가용할 때만)
+    trading_signal_dict = None
+    if extract_trading_signal is not None:
+        try:
+            ts = extract_trading_signal(raw_text, judge_result=judge_result)
+            trading_signal_dict = ts.to_dict()
+        except Exception as _ts_exc:
+            _memory_logger.warning("extract_trading_signal 실패 — %s", _ts_exc)
+
+    report_meta = parse_report_sections(raw_text)
+    claude_leverage = parse_leverage(raw_text)
+
+    # Judge 결과 추출 (signal processing 에 활용)
+    judge_result = (
+        pipeline.judge if pipeline is not None else None
+    )
+
+    # Trading Signal 구조화 (extract_trading_signal 이 가용할 때만)
+    trading_signal_dict = None
+    if extract_trading_signal is not None:
+        try:
+            ts = extract_trading_signal(raw_text, judge_result=judge_result)
+            trading_signal_dict = ts.to_dict()
+        except Exception as _ts_exc:
+            _memory_logger.warning("extract_trading_signal 실패 — %s", _ts_exc)
+
+    report_meta = parse_report_sections(raw_text)
+    claude_leverage = parse_leverage(raw_text)
+
+    # Judge 결과 추출 (signal processing 에 활용)
+    judge_result = (
+        pipeline.judge if pipeline is not None else None
+    )
+
+    # Trading Signal 구조화 (extract_trading_signal 이 가용할 때만)
+    trading_signal_dict = None
+    if extract_trading_signal is not None:
+        try:
+            ts = extract_trading_signal(raw_text, judge_result=judge_result)
+            trading_signal_dict = ts.to_dict()
+        except Exception as _ts_exc:
+            _memory_logger.warning("extract_trading_signal 실패 — %s", _ts_exc)
+
     report_meta = parse_report_sections(raw_text)
     claude_leverage = parse_leverage(raw_text)
 
@@ -1179,6 +1235,63 @@ def run_full_analysis(
         pipeline=pipeline,
         raw_ctx=raw_ctx,   # TPSL override용
     )
+
+    # ── 코드 계산 SL/TP로 AI 출력값 강제 덮어쓰기 ──────────────────────
+    # run_full_analysis에서 실행 — raw_ctx가 이미 정의된 이후
+    # AI는 방향(매수/매도)과 진입가만 결정
+    # SL = 1h 스윙 저점/고점 (구조적 근거), TP = 피보나치 연장선 (코드 계산)
+    # 포지션 보유 중(홀드) → SL만 코드 강제, TP는 AI 원본 사용
+    try:
+        _trade_levels_ref = result.get("trade_levels") or {}
+        _sig_tmp2 = result.get("signal", "")
+        _tpsl_r2 = raw_ctx.get("tpsl_levels") if raw_ctx else None
+        _has_pos2 = raw_ctx is not None and bool(raw_ctx.get("pos_side"))
+
+        if _sig_tmp2 == "홀드" and _has_pos2 and _tpsl_r2 and _tpsl_r2.get("sw"):
+            _pos_side_ctx2 = raw_ctx.get("pos_side", "long")
+            _code_sl_h2 = _tpsl_r2.get("sl_long") if _pos_side_ctx2 == "long" else _tpsl_r2.get("sl_short")
+            if _code_sl_h2 is not None:
+                _trade_levels_ref["stop"] = _code_sl_h2
+                _memory_logger.info("[TPSL override/홀드] SL 강제: $%s", _code_sl_h2)
+
+        elif _sig_tmp2 in ("매수", "매도") and _tpsl_r2 and _tpsl_r2.get("sw"):
+            _fib_dir_tmp2 = "long" if _sig_tmp2 == "매수" else "short"
+            _entry_p2 = _trade_levels_ref.get("entry") or (_tpsl_r2.get("cur") if _tpsl_r2 else None)
+            _atr_v2   = _tpsl_r2.get("atr", 0)
+
+            if _fib_dir_tmp2 == "long":
+                _code_sl2 = _tpsl_r2.get("sl_long")
+                _code_tp2 = _tpsl_r2.get("tp_long")
+            else:
+                _code_sl2 = _tpsl_r2.get("sl_short")
+                _code_tp2 = _tpsl_r2.get("tp_short")
+
+            if _code_sl2 is not None and _entry_p2:
+                if _fib_dir_tmp2 == "long" and _code_sl2 >= float(_entry_p2):
+                    _code_sl2 = round(float(_entry_p2) - _atr_v2 * 1.0, 1)
+                elif _fib_dir_tmp2 == "short" and _code_sl2 <= float(_entry_p2):
+                    _code_sl2 = round(float(_entry_p2) + _atr_v2 * 1.0, 1)
+
+            if _code_sl2 is not None:
+                _trade_levels_ref["stop"] = _code_sl2
+                _memory_logger.info("[TPSL override] SL: $%s", _code_sl2)
+            if _code_tp2 is not None:
+                _trade_levels_ref["target"] = _code_tp2
+                _memory_logger.info("[TPSL override] TP: $%s", _code_tp2)
+
+            try:
+                from agents.fib_stats import get_fib_stats as _gfs2
+                _fs2 = _gfs2()
+                _ext_order2 = _fs2.preferred_extensions(_fib_dir_tmp2)
+                _chosen2 = raw_ctx.get("chosen_fib", {}) if raw_ctx else {}
+                _trade_levels_ref["fib_ext"] = _chosen2.get(_fib_dir_tmp2)
+                _trade_levels_ref["fib_direction"] = _fib_dir_tmp2
+            except Exception:
+                pass
+
+        result["trade_levels"] = _trade_levels_ref
+    except Exception as _ov_exc2:
+        _memory_logger.warning("[TPSL override] 실패: %s → AI 출력값 사용", _ov_exc2)
 
     # 5) 메모리에 이번 상황-조언 페어 기록 (reflection 을 위한 씨앗)
     if memory_obj is not None and MEMORY_WRITE_ENABLED:
