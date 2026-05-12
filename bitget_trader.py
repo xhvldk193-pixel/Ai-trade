@@ -702,39 +702,35 @@ class BitgetAutoTrader:
         # TP만 있고 SL 없어도 → TP만 업데이트
         # SL만 있고 TP 없어도 → SL만 업데이트
 
-        # SL이 None이면 취소하지 않음 — 기존 SL 유지
-        # TP만 바꾸고 싶을 때 기존 SL이 사라지는 것을 방지
+        # place-pos-tpsl: TP/SL 동시 등록 API 사용
+        # cancel 후 재등록 방식 대신 단일 API로 처리 → 기존 SL/TP 소실 방지
+        # TP 또는 SL 중 하나만 있으면 pending 조회 후 나머지 유지
         try:
-            if new_tp is not None and new_sl is not None:
-                # 둘 다 있으면 전체 취소 후 재등록
-                self.client.cancel_all_tpsl(self.symbol)
-            elif new_tp is not None and new_sl is None:
-                # TP만 변경: 기존 TP만 취소 (SL은 유지)
-                try:
-                    self.client.cancel_all_tpsl(self.symbol)  # 전체 취소 불가피
-                    # 기존 SL을 다시 조회해서 재등록
-                    _cur_pos = self.client.get_positions(self.symbol)
-                    if _cur_pos:
-                        _p = _cur_pos[0]
-                        _existing_sl = float(_p.get("stopLossPrice", 0) or 0)
-                        if _existing_sl > 0:
-                            new_sl = _existing_sl
-                            log.info("[AutoTrader] TP만 변경 → 기존 SL $%.2f 유지", new_sl)
-                except Exception as _e:
-                    log.warning("[AutoTrader] 기존 SL 조회 실패: %s", _e)
-            elif new_sl is not None and new_tp is None:
-                # SL만 변경: 기존 TP 유지
-                try:
-                    self.client.cancel_all_tpsl(self.symbol)
-                    _cur_pos = self.client.get_positions(self.symbol)
-                    if _cur_pos:
-                        _p = _cur_pos[0]
-                        _existing_tp = float(_p.get("takeProfitPrice", 0) or 0)
-                        if _existing_tp > 0:
-                            new_tp = _existing_tp
-                            log.info("[AutoTrader] SL만 변경 → 기존 TP $%.2f 유지", new_tp)
-                except Exception as _e:
-                    log.warning("[AutoTrader] 기존 TP 조회 실패: %s", _e)
+            # 기존 pending tpsl 조회
+            _pending = self.client._rest_post(
+                "/api/v2/mix/order/orders-plan-pending",
+                {
+                    "symbol":      self.symbol if self.symbol.endswith("USDT") else f"{self.symbol}USDT",
+                    "productType": "USDT-FUTURES",
+                    "planType":    "profit_loss",
+                }
+            )
+            _pending_list = (_pending or {}).get("data", {}).get("entrustedList", [])
+            for _po in _pending_list:
+                _pt = _po.get("planType", "")
+                _pp = float(_po.get("triggerPrice", 0) or 0)
+                if _pt == "profit_plan" and new_tp is None and _pp > 0:
+                    new_tp = _pp
+                    log.info("[AutoTrader] 기존 TP $%.2f 유지", new_tp)
+                elif _pt == "loss_plan" and new_sl is None and _pp > 0:
+                    new_sl = _pp
+                    log.info("[AutoTrader] 기존 SL $%.2f 유지", new_sl)
+        except Exception as _pe:
+            log.warning("[AutoTrader] 기존 tpsl 조회 실패: %s", _pe)
+
+        # 기존 취소 후 재등록
+        try:
+            self.client.cancel_all_tpsl(self.symbol)
         except Exception:
             pass
 
