@@ -694,12 +694,47 @@ class BitgetAutoTrader:
         # 새 TP/SL 방향 검증 — 진입가 기준으로 방향 오류 사전 차단
         new_tp, new_sl = _validate_tpsl(side, cur, new_tp, new_sl, entry=entry)
 
+        # SL이 무효화돼도 TP는 독립적으로 처리
+        # (SL이 진입가보다 위에 있는 경우 SL만 None, TP는 유효할 수 있음)
         if new_tp is None and new_sl is None:
             result["reason"] = "변경할 TP/SL 없음 (방향 검증 후 모두 무효)"
             return result
+        # TP만 있고 SL 없어도 → TP만 업데이트
+        # SL만 있고 TP 없어도 → SL만 업데이트
 
+        # SL이 None이면 취소하지 않음 — 기존 SL 유지
+        # TP만 바꾸고 싶을 때 기존 SL이 사라지는 것을 방지
         try:
-            self.client.cancel_all_tpsl(self.symbol)
+            if new_tp is not None and new_sl is not None:
+                # 둘 다 있으면 전체 취소 후 재등록
+                self.client.cancel_all_tpsl(self.symbol)
+            elif new_tp is not None and new_sl is None:
+                # TP만 변경: 기존 TP만 취소 (SL은 유지)
+                try:
+                    self.client.cancel_all_tpsl(self.symbol)  # 전체 취소 불가피
+                    # 기존 SL을 다시 조회해서 재등록
+                    _cur_pos = self.client.get_positions(self.symbol)
+                    if _cur_pos:
+                        _p = _cur_pos[0]
+                        _existing_sl = float(_p.get("stopLossPrice", 0) or 0)
+                        if _existing_sl > 0:
+                            new_sl = _existing_sl
+                            log.info("[AutoTrader] TP만 변경 → 기존 SL $%.2f 유지", new_sl)
+                except Exception as _e:
+                    log.warning("[AutoTrader] 기존 SL 조회 실패: %s", _e)
+            elif new_sl is not None and new_tp is None:
+                # SL만 변경: 기존 TP 유지
+                try:
+                    self.client.cancel_all_tpsl(self.symbol)
+                    _cur_pos = self.client.get_positions(self.symbol)
+                    if _cur_pos:
+                        _p = _cur_pos[0]
+                        _existing_tp = float(_p.get("takeProfitPrice", 0) or 0)
+                        if _existing_tp > 0:
+                            new_tp = _existing_tp
+                            log.info("[AutoTrader] SL만 변경 → 기존 TP $%.2f 유지", new_tp)
+                except Exception as _e:
+                    log.warning("[AutoTrader] 기존 TP 조회 실패: %s", _e)
         except Exception:
             pass
 
