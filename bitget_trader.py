@@ -30,35 +30,45 @@ class BitgetClient:
         })
 
     def get_account(self, symbol="BTCUSDT"):
+        """잔고 조회 — CCXT 대신 _rest_post 직접 호출 (40009 서명 오류 방지)."""
         for attempt in range(3):
             try:
-                bal = self._ex.fetch_balance({"type": "swap"})
-                usdt = bal.get("USDT") or {}
-                total = float(usdt.get("total") or 0)
-                free = float(usdt.get("free") or 0)
-                if total > 0:
+                resp = self._rest_post(
+                    "/api/v2/mix/account/account",
+                    {
+                        "symbol":      "BTCUSDT",
+                        "productType": "USDT-FUTURES",
+                        "marginCoin":  "USDT",
+                    }
+                )
+                data = (resp or {}).get("data") or {}
+                equity    = float(data.get("equity",    0) or 0)
+                available = float(data.get("available", 0) or 0)
+                if equity > 0:
+                    # 오늘 PnL 조회
                     today_pnl = 0.0
                     try:
                         import datetime as _dt
-                        # 오늘 UTC 자정 타임스탬프 (밀리초) — tz-aware 필수
-                        # datetime.utcnow() 는 deprecated 이고, 결과를 timestamp() 하면
-                        # 로컬 타임존으로 해석되어 9시간 어긋난 PnL 집계되는 버그가 있었음.
-                        now_utc = _dt.datetime.now(_dt.timezone.utc)
-                        start_utc = _dt.datetime(
-                            now_utc.year, now_utc.month, now_utc.day,
-                            tzinfo=_dt.timezone.utc,
+                        now_utc   = _dt.datetime.now(_dt.timezone.utc)
+                        start_utc = _dt.datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=_dt.timezone.utc)
+                        start_ts  = int(start_utc.timestamp() * 1000)
+                        pnl_resp  = self._rest_post(
+                            "/api/v2/mix/order/fill-history",
+                            {
+                                "symbol":      "BTCUSDT",
+                                "productType": "USDT-FUTURES",
+                                "startTime":   str(start_ts),
+                            }
                         )
-                        start_ts = int(start_utc.timestamp() * 1000)
-                        pnl_data = self._ex.fetch_my_trades(
-                            f"BTC/USDT:USDT",
-                            params={"productType": "USDT-FUTURES", "startTime": str(start_ts)}
-                        )
-                        today_pnl = sum(float(t.get("info", {}).get("profit", 0) or 0) for t in pnl_data)
+                        pnl_list = ((pnl_resp or {}).get("data") or {}).get("fillList") or []
+                        today_pnl = sum(float(t.get("profit", 0) or 0) for t in pnl_list)
                     except Exception as pnl_err:
                         log.warning("[PNL-ERR] %s", pnl_err)
-                    return {"equity": total, "available": free, "unrealizedPL": 0.0, "todayProfitLoss": today_pnl}
+                    return {"equity": equity, "available": available, "unrealizedPL": 0.0, "todayProfitLoss": today_pnl}
             except Exception as e:
-                if attempt == 2: raise
+                log.warning("[get_account] 시도 %d 실패: %s", attempt+1, e)
+                if attempt == 2:
+                    raise
                 import time as _t; _t.sleep(1)
         return {"equity": 0, "available": 0, "unrealizedPL": 0.0, "todayProfitLoss": 0}
 
