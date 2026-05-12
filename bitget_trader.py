@@ -30,10 +30,10 @@ class BitgetClient:
         })
 
     def get_account(self, symbol="BTCUSDT"):
-        """잔고 조회 — CCXT 대신 _rest_post 직접 호출 (40009 서명 오류 방지)."""
+        """잔고 조회 — GET 요청으로 직접 호출 (40009 서명 오류 방지)."""
         for attempt in range(3):
             try:
-                resp = self._rest_post(
+                resp = self._rest_get(
                     "/api/v2/mix/account/account",
                     {
                         "symbol":      "BTCUSDT",
@@ -52,7 +52,7 @@ class BitgetClient:
                         now_utc   = _dt.datetime.now(_dt.timezone.utc)
                         start_utc = _dt.datetime(now_utc.year, now_utc.month, now_utc.day, tzinfo=_dt.timezone.utc)
                         start_ts  = int(start_utc.timestamp() * 1000)
-                        pnl_resp  = self._rest_post(
+                        pnl_resp  = self._rest_get(
                             "/api/v2/mix/order/fill-history",
                             {
                                 "symbol":      "BTCUSDT",
@@ -196,6 +196,35 @@ class BitgetClient:
                 log.warning("[Bitget] 청산 실패: %s", e)
         return results
 
+    def _rest_get(self, path: str, params: dict) -> dict:
+        """Bitget REST API GET 요청 직접 호출 (쿼리스트링 서명)."""
+        import hmac, hashlib, base64, time as _t, requests as _req
+        from urllib.parse import urlencode
+        api_key    = self._ex.apiKey
+        secret     = self._ex.secret
+        passphrase = self._ex.password
+        ts = str(int(_t.time() * 1000))
+        query_str = urlencode(params)
+        full_path = path + "?" + query_str  # 서명에 쿼리스트링 포함
+        pre  = ts + "GET" + full_path       # body 없음
+        sign = base64.b64encode(hmac.new(secret.encode(), pre.encode(), hashlib.sha256).digest()).decode()
+        headers = {
+            "ACCESS-KEY":        api_key,
+            "ACCESS-SIGN":       sign,
+            "ACCESS-TIMESTAMP":  ts,
+            "ACCESS-PASSPHRASE": passphrase,
+            "Content-Type":      "application/json",
+        }
+        log.debug("[REST-GET] %s", full_path)
+        r = _req.get("https://api.bitget.com" + full_path, headers=headers, timeout=10)
+        d = r.json()
+        if d.get("code") not in ("00000", "0"):
+            err = f"Bitget: {d.get('msg')} ({d.get('code')})"
+            log.warning("[REST-GET] %s 오류: %s", path, err)
+            self._tg_alert(f"⚠️ Bitget API 오류\n{err}\n경로: {path}")
+            raise RuntimeError(err)
+        return d
+
     def _rest_post(self, path: str, body: dict) -> dict:
         """Bitget REST API 직접 호출 (ccxt 우회)."""
         import hmac, hashlib, base64, time as _t, json as _json, requests as _req
@@ -310,7 +339,7 @@ class BitgetClient:
         # Bitget v2: 개별 orderId가 필요하므로 pending 조회 후 일괄 취소
         try:
             _sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
-            _pending = self._rest_post(
+            _pending = self._rest_get(
                 "/api/v2/mix/order/orders-plan-pending",
                 {
                     "symbol":      _sym,
@@ -719,7 +748,7 @@ class BitgetAutoTrader:
         # TP 또는 SL 중 하나만 있으면 pending 조회 후 나머지 유지
         try:
             # 기존 pending tpsl 조회
-            _pending = self.client._rest_post(
+            _pending = self.client._rest_get(
                 "/api/v2/mix/order/orders-plan-pending",
                 {
                     "symbol":      self.symbol if self.symbol.endswith("USDT") else f"{self.symbol}USDT",
