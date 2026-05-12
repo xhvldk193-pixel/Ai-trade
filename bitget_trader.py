@@ -603,30 +603,24 @@ class BitgetAutoTrader:
         if entry_price and price:
             if desired == "long":
                 if price >= entry_price:
-                    # ✅ 이미 돌파 — 버퍼 내면 시장가, 초과하면 지정가(되돌림 대기)
-                    buffered_entry = entry_price * (1 + ENTRY_BUFFER)
-                    if price > buffered_entry:
-                        use_limit = True
-                        log.info("[AutoTrader] 롱 — 버퍼 초과(현재가 $%.2f) → 지정가 되돌림 대기", price)
-                    else:
-                        entry_price = None   # 시장가
-                        log.info("[AutoTrader] 롱 — 돌파 확인(버퍼 이내) → 시장가 진입")
+                    # 이미 진입가 이상 — 되돌림 대기 (지정가)
+                    use_limit = True
+                    log.info("[AutoTrader] 롱 — 현재가($%.2f) >= 진입가($%.2f) → 지정가 되돌림 대기",
+                             price, entry_price)
                 else:
-                    # ⏳ 미돌파 → 트리거 주문 등록
+                    # 미돌파 → 트리거 주문 등록
                     use_trigger = True
                     log.info("[AutoTrader] 롱 — 미돌파(현재가 $%.2f < 진입가 $%.2f) → 트리거 주문 등록",
                              price, entry_price)
 
             elif desired == "short":
                 if price <= entry_price:
-                    buffered_entry = entry_price * (1 - ENTRY_BUFFER)
-                    if price < buffered_entry:
-                        use_limit = True
-                        log.info("[AutoTrader] 숏 — 버퍼 초과 하락(현재가 $%.2f) → 지정가 되돌림 대기", price)
-                    else:
-                        entry_price = None
-                        log.info("[AutoTrader] 숏 — 이탈 확인(버퍼 이내) → 시장가 진입")
+                    # 이미 진입가 이하 — 되돌림 대기 (지정가)
+                    use_limit = True
+                    log.info("[AutoTrader] 숏 — 현재가($%.2f) <= 진입가($%.2f) → 지정가 되돌림 대기",
+                             price, entry_price)
                 else:
+                    # 미이탈 → 트리거 주문 등록
                     use_trigger = True
                     log.info("[AutoTrader] 숏 — 미이탈(현재가 $%.2f > 진입가 $%.2f) → 트리거 주문 등록",
                              price, entry_price)
@@ -657,6 +651,12 @@ class BitgetAutoTrader:
         if use_limit and entry_price:
             order_resp = self.client.place_order(self.symbol, order_side, size, order_type="limit", price=entry_price, tp=tp, sl=sl)
             result["reason"] = f"지정가 진입 @ ${entry_price:,.2f}"
+        elif not entry_price:
+            # 진입가 없으면 시장가 진입 차단 — 반드시 되돌림/트리거 진입
+            result["reason"] = "진입가 미설정 → 시장가 진입 차단 (되돌림 대기 필요)"
+            log.info("[AutoTrader] 진입가 없음 → 시장가 차단")
+            self._last = result
+            return result
         else:
             order_resp = self.client.place_order(self.symbol, order_side, size, tp=tp, sl=sl)
         result["action"] = desired

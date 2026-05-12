@@ -1765,7 +1765,7 @@ class AnalysisManager:
                             # 알림 전 방향 검증
                             from bitget_trader import _validate_tpsl as _vts
                             _dir = "long" if "long" in side.lower() else "short"
-                            _vsl, _vtp = _vts(_dir, entry, new_tp, new_sl, entry=entry)
+                            _vtp, _vsl = _vts(_dir, entry, new_tp, new_sl, entry=entry)
                             msg = f"📊 포지션 관리 알림\n{side.upper()} 진입가 ${entry:,.2f}\n미실현: {emoji}${upnl:+,.2f}\n"
                             if _vsl:
                                 msg += f"AI 권고 손절: ${_vsl:,.2f}\n"
@@ -2099,6 +2099,35 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
     signal     = analysis.get("signal", "홀드")
     confidence = analysis.get("confidence", 0)
     trade_levels = analysis.get("trade_levels")
+
+    # ── RSI 과매수/과매도 진입 필터 (1h 기준) ───────────────────────────
+    # 롱: 1h RSI 65 이상이면 이미 과매수 → 진입 금지
+    # 숏: 1h RSI 35 이하이면 이미 과매도 → 진입 금지
+    if signal in ("매수", "매도") and tf_data and "1h" in tf_data:
+        try:
+            import logging as _rsi_log
+            _rsi_logger = _rsi_log.getLogger("rsi-filter")
+            _df1h = tf_data["1h"]
+            _rsi_val = float(_df1h.iloc[-1].get("rsi", 50) or 50)
+            _rsi_block = False
+
+            if signal == "매수" and _rsi_val > 60:
+                _rsi_block = True
+                _rsi_logger.info("[RSI필터] 롱 차단 — 1h RSI %.1f > 60 (과매수)", _rsi_val)
+                _msg = f"RSI {_rsi_val:.1f} > 60 과매수 차단 / 현재가 ${price:,.0f}"
+                _tg("RSI 필터 차단 / 롱 진입 거부 / " + _msg)
+            elif signal == "매도" and _rsi_val < 40:
+                _rsi_block = True
+                _rsi_logger.info("[RSI필터] 숏 차단 — 1h RSI %.1f < 40 (과매도)", _rsi_val)
+                _msg = f"RSI {_rsi_val:.1f} < 40 과매도 차단 / 현재가 ${price:,.0f}"
+                _tg("RSI 필터 차단 / 숏 진입 거부 / " + _msg)
+
+            if _rsi_block:
+                return
+        except Exception as _rsi_exc:
+            import logging as _rsi_log
+            _rsi_log.getLogger("rsi-filter").warning("[RSI필터] 계산 실패: %s", _rsi_exc)
+    # ───────────────────────────────────────────────────────────────────
 
     # AI 권장 레버리지는 로그용 — 정확한 위치(claude_leverage)에서 읽음.
     # 기존엔 summary(한줄요약)에서 정규식으로 찾으려 했으나 거기엔 거의 없는 죽은 코드.
