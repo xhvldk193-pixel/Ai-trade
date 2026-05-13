@@ -100,10 +100,12 @@ class BitgetClient:
                     "marginCoin":  "USDT",
                 }
             )
+            log.info("[get_positions] 응답: %s", str(resp)[:300])
             data_list = (resp or {}).get("data") or []
             # 해당 심볼 필터링
             _sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
             data_list = [p for p in data_list if p.get("symbol") == _sym]
+            log.info("[get_positions] 심볼 %s 포지션 %d개", _sym, len(data_list))
             result = []
             for p in data_list:
                 total = float(p.get("total", 0) or 0)

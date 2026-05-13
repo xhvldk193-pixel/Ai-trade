@@ -2116,11 +2116,25 @@ async def _run_auto_trade(analysis: dict, price: float | None, tf_data: dict | N
                 _rsi_logger.info("[RSI필터] 롱 차단 — 1h RSI %.1f > 60 (과매수)", _rsi_val)
                 _msg = f"RSI {_rsi_val:.1f} > 60 과매수 차단 / 현재가 ${price:,.0f}"
                 _tg("RSI 필터 차단 / 롱 진입 거부 / " + _msg)
+                # 과매수 구간 → 역추세 숏 되돌림 제안
+                _tg(f"역추세 기회 / RSI {_rsi_val:.1f} 과매수 / 숏 되돌림 진입 고려 / 현재가 ${price:,.0f} 위 저항 확인 후 숏 트리거 검토")
             elif signal == "매도" and _rsi_val < 40:
                 _rsi_block = True
                 _rsi_logger.info("[RSI필터] 숏 차단 — 1h RSI %.1f < 40 (과매도)", _rsi_val)
                 _msg = f"RSI {_rsi_val:.1f} < 40 과매도 차단 / 현재가 ${price:,.0f}"
                 _tg("RSI 필터 차단 / 숏 진입 거부 / " + _msg)
+                # 과매도 구간 → 역추세 롱 되돌림 제안
+                # 되돌림 예상가: 현재가 + ATR×0.5 (반등 후 눌림 자리)
+                try:
+                    _df1h_atr = tf_data["1h"]
+                    _atr_v = float(_df1h_atr.iloc[-1].get("atr", 0) or 0)
+                    _rebound_entry = round(price + _atr_v * 0.5, 1) if _atr_v > 0 else None
+                    if _rebound_entry:
+                        _tg(f"역추세 기회 / RSI {_rsi_val:.1f} 극단 과매도 / 롱 되돌림 고려 / 반등 후 눌림가 ${_rebound_entry:,.0f} 근처 롱 트리거 검토")
+                    else:
+                        _tg(f"역추세 기회 / RSI {_rsi_val:.1f} 극단 과매도 / 롱 되돌림 고려 / 현재가 ${price:,.0f}")
+                except Exception:
+                    _tg(f"역추세 기회 / RSI {_rsi_val:.1f} 극단 과매도 / 롱 되돌림 고려 / 현재가 ${price:,.0f}")
 
             if _rsi_block:
                 return
