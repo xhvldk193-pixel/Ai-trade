@@ -94,14 +94,16 @@ class BitgetClient:
         """포지션 조회 — CCXT 대신 _rest_get 직접 호출 (40009 서명 오류 방지)."""
         try:
             resp = self._rest_get(
-                "/api/v2/mix/position/single-position",
+                "/api/v2/mix/position/all-position",
                 {
-                    "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
                     "productType": "USDT-FUTURES",
                     "marginCoin":  "USDT",
                 }
             )
             data_list = (resp or {}).get("data") or []
+            # 해당 심볼 필터링
+            _sym = symbol if symbol.endswith("USDT") else f"{symbol}USDT"
+            data_list = [p for p in data_list if p.get("symbol") == _sym]
             result = []
             for p in data_list:
                 total = float(p.get("total", 0) or 0)
