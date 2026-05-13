@@ -578,7 +578,82 @@ def fetch_macro_context() -> dict:
     # ── 전통 시장 (yfinance) ────────────────────────────────
     result["_trad_markets"] = _fetch_traditional_markets()
 
+    # ── Polymarket BTC 예측 ──────────────────────────────────
+    result["_polymarket"] = _fetch_polymarket_btc()
+
     attach_macro_history_summary(result)
+    return result
+
+
+
+# ── Polymarket BTC 예측 ──────────────────────────────────────
+def _fetch_polymarket_btc() -> dict:
+    """
+    Polymarket Gamma API에서 BTC 관련 예측 시장 데이터를 가져옵니다.
+    - 오늘 BTC Up/Down 확률
+    - BTC 가격 구간 예측
+    """
+    import datetime as _dt
+    result = {"error": None, "markets": []}
+    try:
+        import requests as _req
+        # Gamma API - 무료, 인증 불필요
+        resp = _req.get(
+            "https://gamma-api.polymarket.com/markets",
+            params={
+                "tag_slug": "bitcoin",
+                "active": "true",
+                "limit": "10",
+                "order": "volumeNum",
+                "ascending": "false",
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            result["error"] = f"HTTP {resp.status_code}"
+            return result
+
+        markets = resp.json()
+        today = _dt.date.today().strftime("%Y-%m-%d")
+
+        for m in markets:
+            question = m.get("question", "")
+            # BTC 일간 Up/Down 마켓
+            if ("BTC" in question or "Bitcoin" in question) and                ("up" in question.lower() or "down" in question.lower() or "price" in question.lower()):
+                outcomes = m.get("outcomes", "[]")
+                prices = m.get("outcomePrices", "[]")
+                try:
+                    import json as _json
+                    if isinstance(outcomes, str):
+                        outcomes = _json.loads(outcomes)
+                    if isinstance(prices, str):
+                        prices = _json.loads(prices)
+                except Exception:
+                    pass
+
+                market_info = {
+                    "question": question,
+                    "volume": float(m.get("volumeNum", 0) or 0),
+                    "outcomes": [],
+                }
+                for o, p in zip(outcomes, prices):
+                    try:
+                        market_info["outcomes"].append({
+                            "name": o,
+                            "probability": round(float(p) * 100, 1),
+                        })
+                    except Exception:
+                        pass
+
+                if market_info["outcomes"]:
+                    result["markets"].append(market_info)
+
+                if len(result["markets"]) >= 3:
+                    break
+
+    except Exception as e:
+        result["error"] = str(e)[:100]
+
     return result
 
 
@@ -747,6 +822,25 @@ def format_macro_context(macro: dict) -> str:
         )
     elif trad_error:
         lines.append(f"[전통 시장]: 수집 실패 — {trad_error}")
+
+    # ── Polymarket 예측 ─────────────────────────────────────
+    poly = macro.get("_polymarket") or {}
+    poly_markets = poly.get("markets", [])
+    if poly_markets:
+        lines.append("[Polymarket BTC 예측]  ※ 집단 지성 기반 확률 — 선행 지표로 활용")
+        for m in poly_markets[:3]:
+            q = m.get("question", "")[:60]
+            outcomes = m.get("outcomes", [])
+            outcome_str = " / ".join(
+                f"{o['name']} {o['probability']:.0f}%"
+                for o in outcomes
+            )
+            vol = m.get("volume", 0)
+            lines.append(f"  {q}")
+            lines.append(f"    → {outcome_str}  (거래량 ${vol:,.0f})")
+        lines.append("  ※ 확률 60%+ = 강한 시장 컨센서스. 방향 판단 시 가중치 부여 권장.")
+    elif poly.get("error"):
+        lines.append(f"[Polymarket]: 수집 실패 — {poly.get('error')}")
 
     # ── 종합 해석 ────────────────────────────────────────────
     lines.append(
