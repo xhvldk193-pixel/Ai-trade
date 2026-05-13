@@ -108,11 +108,12 @@ class BitgetClient:
                 if total <= 0:
                     continue
                 side           = p.get("holdSide", "")
-                entry          = float(p.get("averageOpenPrice", 0) or 0)
+                # v2 API: openPriceAvg (단일포지션), averageOpenPrice (이력) 둘 다 체크
+                entry          = float(p.get("openPriceAvg") or p.get("averageOpenPrice") or 0)
                 mark           = float(p.get("markPrice", 0) or 0)
                 unrealized_pnl = float(p.get("unrealizedPL", 0) or 0)
                 leverage       = float(p.get("leverage", 10) or 10)
-                margin         = float(p.get("margin", 0) or 0)
+                margin         = float(p.get("marginSize") or p.get("margin") or 0)
                 unrealized_pnl_r = (unrealized_pnl / margin) if margin > 0 else 0.0
 
                 result.append({
