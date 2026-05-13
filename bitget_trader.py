@@ -91,39 +91,44 @@ class BitgetClient:
             return []
 
     def get_positions(self, symbol: str = "BTCUSDT") -> list[dict]:
-        ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
-        positions = self._ex.fetch_positions([ccxt_symbol])
-        result = []
-        for p in positions:
-            contracts = float(p.get("contracts") or 0)
-            if contracts <= 0:
-                continue
+        """포지션 조회 — CCXT 대신 _rest_get 직접 호출 (40009 서명 오류 방지)."""
+        try:
+            resp = self._rest_get(
+                "/api/v2/mix/position/single-position",
+                {
+                    "symbol":      symbol if symbol.endswith("USDT") else f"{symbol}USDT",
+                    "productType": "USDT-FUTURES",
+                    "marginCoin":  "USDT",
+                }
+            )
+            data_list = (resp or {}).get("data") or []
+            result = []
+            for p in data_list:
+                total = float(p.get("total", 0) or 0)
+                if total <= 0:
+                    continue
+                side           = p.get("holdSide", "")
+                entry          = float(p.get("averageOpenPrice", 0) or 0)
+                mark           = float(p.get("markPrice", 0) or 0)
+                unrealized_pnl = float(p.get("unrealizedPL", 0) or 0)
+                leverage       = float(p.get("leverage", 10) or 10)
+                margin         = float(p.get("margin", 0) or 0)
+                unrealized_pnl_r = (unrealized_pnl / margin) if margin > 0 else 0.0
 
-            side = p.get("side", "") or p.get("info", {}).get("holdSide", "")
-            log.debug("[RAW] side=%s unrealizedPnl=%s info_pnl=%s",
-                      side, p.get("unrealizedPnl"), p.get("info", {}).get("unrealizedPL"))
-            entry = float(p.get("entryPrice") or 0)
-            mark  = float(p.get("markPrice") or 0)
-
-            # ccxt unrealizedPnl 그대로 사용
-            unrealized_pnl = float(p.get("unrealizedPnl") or 0)
-
-            pct = p.get("percentage")
-            unrealized_pnl_r = float(pct) / 100 if pct is not None else 0.0
-            # 숏 percentage도 부호 보정
-            if side == "short" and unrealized_pnl_r > 0 and unrealized_pnl < 0:
-                unrealized_pnl_r = -unrealized_pnl_r
-
-            result.append({
-                "holdSide":         side,
-                "total":            contracts,
-                "averageOpenPrice": entry,
-                "markPrice":        mark,
-                "unrealizedPL":     unrealized_pnl,
-                "unrealizedPLR":    unrealized_pnl_r,
-                "leverage":         p.get("leverage", 1),
-            })
-        return result
+                result.append({
+                    "holdSide":         side,
+                    "total":            total,
+                    "averageOpenPrice": entry,
+                    "markPrice":        mark,
+                    "unrealizedPL":     unrealized_pnl,
+                    "unrealizedPLR":    unrealized_pnl_r,
+                    "leverage":         leverage,
+                    "margin":           margin,
+                })
+            return result
+        except Exception as e:
+            log.warning("[get_positions] 실패: %s", e)
+            return []
 
     def set_leverage(self, symbol: str, leverage: int, hold_side: str = "long") -> dict:
         ccxt_symbol = f"{symbol[:3]}/{symbol[3:]}:{symbol[3:]}"
