@@ -1740,8 +1740,16 @@ class AnalysisManager:
                 try:
                     _cur_pos = await asyncio.to_thread(_auto_trader.get_positions)
                     _has_position = bool(_cur_pos)
-                except Exception:
-                    pass
+                    import logging as _hpos_log
+                    _hpos_log.getLogger("has-position").info(
+                        "[has_position] 포지션 %d개 → _has_position=%s",
+                        len(_cur_pos) if _cur_pos else 0, _has_position
+                    )
+                except Exception as _hpos_exc:
+                    import logging as _hpos_log
+                    _hpos_log.getLogger("has-position").warning(
+                        "[has_position] 오류: %s", _hpos_exc
+                    )
 
             # ── 포지션 있을 때: TP/SL 동적 업데이트 + 관리 알림 ──────
             # 포지션 체크를 신규 진입 전으로 분리 — 이전 구조에서는 포지션 있으면
