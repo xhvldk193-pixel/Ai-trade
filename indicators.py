@@ -74,25 +74,11 @@ def add_stochastic(df: pd.DataFrame, k: int = 14, d: int = 3) -> pd.DataFrame:
 
 # ── ATR (Average True Range) ─────────────────
 def add_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """ATR — RMA(Wilder's) 방식. 트레이딩뷰와 동일하게 첫 period개 SMA로 초기화."""
     hl  = df["high"] - df["low"]
     hc  = (df["high"] - df["close"].shift()).abs()
     lc  = (df["low"]  - df["close"].shift()).abs()
     tr  = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-
-    # 트레이딩뷰 방식: 첫 period봉은 SMA, 이후 RMA
-    atr = np.full(len(tr), np.nan)
-    tr_vals = tr.values
-    # 첫 유효 SMA 초기값
-    for i in range(len(tr_vals)):
-        if i < period - 1:
-            continue
-        if i == period - 1:
-            atr[i] = np.mean(tr_vals[:period])
-        else:
-            atr[i] = (atr[i-1] * (period - 1) + tr_vals[i]) / period
-
-    df["atr"] = atr
+    df["atr"] = tr.ewm(com=period - 1, adjust=False).mean()
     return df
 
 

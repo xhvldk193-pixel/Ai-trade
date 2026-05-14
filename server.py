@@ -1735,6 +1735,8 @@ class AnalysisManager:
                     pass
 
             # ── 포지션 보유 여부 확인 (신규 진입 여부 판단용) ──────
+            import logging as _reach_log
+            _reach_log.getLogger("position-check").info("[position-check] 포지션 체크 블록 진입")
             _has_position = False
             if _auto_trader:
                 try:
